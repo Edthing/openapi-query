@@ -35,7 +35,6 @@ type Node struct {
 	ValStart   int
 	ValEnd     int
 	AfterColon int // mapping children only
-	bound      int
 }
 
 func ParseDoc(abs, disp string, src []byte) (*Doc, error) {
@@ -165,7 +164,6 @@ func (n *Node) Child(seg string) *Node {
 // expand creates children and computes ends. bound is the exclusive limit
 // (next sibling's start or the parent's limit).
 func (d *Doc) expand(n *Node, bound int) {
-	n.bound = bound
 	y := n.Val
 	flow := isFlowColl(y)
 	if flow {

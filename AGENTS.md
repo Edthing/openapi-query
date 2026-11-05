@@ -11,18 +11,24 @@ Guidance for agents and contributors working on this repository. For using `oq` 
 ```
 cmd/oq/main.go           entry point, calls oq.Main
 internal/oq/doc.go       parse with go.yaml.in/yaml/v3, byte ranges for every node
-internal/oq/ws.go        workspace (root spec + external files), addresses, $ref resolution
-internal/oq/out.go       TSV/JSON records, token estimate, hashes, node text
+internal/oq/ws.go        workspace (root spec + external files), exit codes
+internal/oq/addr.go      JSON pointer encoding, address resolution (opid:, path:, schema:, GET /x)
+internal/oq/openapi.go   OpenAPI structure: version, operations, schema locations
+internal/oq/refs.go      $ref parsing, resolution, file closure
+internal/oq/out.go       records, output formats (tsv/name/columns/json/yaml), tokens, hashes
 internal/oq/read.go      outline, ls, get, at, deps, refs
-internal/oq/write.go     set, insert, rm: splicing, verification, atomic -i
+internal/oq/write.go     set, insert, rm: splicing and verification
+internal/oq/flow.go      converting new content to JSON for JSON/flow contexts
+internal/oq/writecmd.go  write command plumbing, --expect, atomic -i
 internal/oq/cli.go       flag parsing, dispatch, size cap, exit codes
+internal/oq/help.go      help text
 testdata/                small fixtures: comments, anchors, block scalars, minified JSON, multi-file refs
 ```
 
 ## Commands
 
 ```sh
-go build ./... && go vet ./... && go test ./...
+make lint && go test ./...
 make build                                  # ./oq
 make corpus DIR=/path/to/specs              # slice + round-trip checks over many specs
 ```

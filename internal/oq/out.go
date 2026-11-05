@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -45,7 +46,7 @@ func (r Rec) json() string {
 		b.WriteByte(':')
 		switch v := kv.V.(type) {
 		case Tok:
-			b.WriteString(itoa(int(v)))
+			b.WriteString(strconv.Itoa(int(v)))
 		default:
 			b.WriteString(jsonStr(v))
 		}
@@ -66,7 +67,7 @@ func (r Rec) yaml(first, rest string) string {
 		var v string
 		switch x := kv.V.(type) {
 		case Tok:
-			v = itoa(int(x))
+			v = strconv.Itoa(int(x))
 		case string:
 			v = yamlStr(x, len(rest)+2)
 		case map[string]int:
@@ -77,7 +78,7 @@ func (r Rec) yaml(first, rest string) string {
 			sort.Strings(keys)
 			parts := make([]string, len(keys))
 			for j, k := range keys {
-				parts[j] = k + ": " + itoa(x[k])
+				parts[j] = k + ": " + strconv.Itoa(x[k])
 			}
 			v = "{" + strings.Join(parts, ", ") + "}"
 		default:
@@ -196,7 +197,7 @@ func (r Rec) tsv() string {
 	for i, kv := range r {
 		switch v := kv.V.(type) {
 		case Tok:
-			cols[i] = "~" + itoa(int(v))
+			cols[i] = "~" + strconv.Itoa(int(v))
 		case string:
 			cols[i] = strings.NewReplacer("\t", " ", "\n", " ", "\r", "").Replace(v)
 		default:

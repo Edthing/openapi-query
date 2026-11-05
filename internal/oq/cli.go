@@ -1,7 +1,6 @@
 package oq
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -51,10 +50,10 @@ type cmdFn func(c *cli, o *opts) (*result, error)
 
 type cmdSpec struct {
 	fn    cmdFn
-	flags string // allowed flags, space separated
-	read  bool
+	flags string // command-specific flags, space separated
+	read  bool   // read commands honour the size cap and may take the spec from stdin
 	usage string
-	min   int // positional args, spec included
+	min   int // positional arguments including the spec (read commands)
 	max   int
 }
 
@@ -69,15 +68,24 @@ var commands map[string]cmdSpec
 
 func init() {
 	commands = map[string]cmdSpec{
-		"outline": {cmdOutline, "--depth --header", true, "oq outline <spec> [addr] [--depth N]", 1, 2},
-		"ls":      {cmdLs, "--header", true, "oq ls <spec> ops|schemas|tags|files", 2, 2},
-		"get":     {cmdGet, "--metadata --header", true, "oq get <spec> <addr>", 2, 2},
-		"at":      {cmdAt, "", true, "oq at <spec> <line>[:<col>]", 2, 2},
-		"deps":    {cmdDeps, "--depth --unresolved --header", true, "oq deps <spec> <addr> [--depth N] [--unresolved]", 2, 2},
-		"refs":    {cmdRefs, "--header", true, "oq refs <spec> <addr>", 2, 2},
-		"set":     {cmdSet, "--expect -i --file", false, "oq set <spec> <addr> [--expect H] [-i] [--file F] < new.yaml", 0, 0},
-		"insert":  {cmdInsert, "--after --expect -i --file", false, "oq insert <spec> <addr> [--after KEY] [--expect H] [-i] [--file F] < new.yaml", 0, 0},
-		"rm":      {cmdRm, "--expect -i", false, "oq rm <spec> <addr> [--expect H] [-i]", 0, 0},
+		"outline": {fn: cmdOutline, flags: "--depth --header", read: true, min: 1, max: 2,
+			usage: "oq outline <spec> [addr] [--depth N]"},
+		"ls": {fn: cmdLs, flags: "--header", read: true, min: 2, max: 2,
+			usage: "oq ls <spec> ops|schemas|tags|files"},
+		"get": {fn: cmdGet, flags: "--metadata --header", read: true, min: 2, max: 2,
+			usage: "oq get <spec> <addr> [--metadata]"},
+		"at": {fn: cmdAt, read: true, min: 2, max: 2,
+			usage: "oq at <spec> <line>[:<col>]"},
+		"deps": {fn: cmdDeps, flags: "--depth --unresolved --header", read: true, min: 2, max: 2,
+			usage: "oq deps <spec> <addr> [--depth N] [--unresolved]"},
+		"refs": {fn: cmdRefs, flags: "--header", read: true, min: 2, max: 2,
+			usage: "oq refs <spec> <addr>"},
+		"set": {fn: cmdSet, flags: "--expect -i --file",
+			usage: "oq set <spec> <addr> [--expect H] [-i] [--file F] < new.yaml"},
+		"insert": {fn: cmdInsert, flags: "--after --expect -i --file",
+			usage: "oq insert <spec> <addr> [--after KEY] [--expect H] [-i] [--file F] < new.yaml"},
+		"rm": {fn: cmdRm, flags: "--expect -i",
+			usage: "oq rm <spec> <addr> [--expect H] [-i]"},
 	}
 }
 
@@ -304,5 +312,3 @@ func shq(s string) string {
 }
 
 func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
-
-var _ = bytes.MinRead

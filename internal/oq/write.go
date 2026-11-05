@@ -3,8 +3,6 @@ package oq
 import (
 	"bytes"
 	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -149,90 +147,6 @@ func (d *Doc) jsonUnit() string {
 
 func (d *Doc) pretty() bool { return bytes.Contains(bytes.TrimSpace(d.Src), []byte("\n")) }
 
-var jsonNum = regexp.MustCompile(`^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$`)
-
-// toJSON renders a node as JSON; pretty output indents by unit at level.
-func toJSON(y *yaml.Node, pretty, tight bool, unit string, level int) (string, error) {
-	in := func(l int) string { return strings.Repeat(unit, l) }
-	switch y.Kind {
-	case yaml.MappingNode, yaml.SequenceNode:
-		isMap := y.Kind == yaml.MappingNode
-		open, cl := "[", "]"
-		if isMap {
-			open, cl = "{", "}"
-		}
-		if len(y.Content) == 0 {
-			return open + cl, nil
-		}
-		var parts []string
-		step := 1
-		if isMap {
-			step = 2
-		}
-		for i := 0; i < len(y.Content); i += step {
-			v := y.Content[i+step-1]
-			s, err := toJSON(v, pretty, tight, unit, level+1)
-			if err != nil {
-				return "", err
-			}
-			if isMap {
-				sepc := ": "
-				if tight {
-					sepc = ":"
-				}
-				s = jsonStr(y.Content[i].Value) + sepc + s
-			}
-			parts = append(parts, s)
-		}
-		if pretty {
-			var b strings.Builder
-			b.WriteString(open + "\n")
-			for i, p := range parts {
-				b.WriteString(in(level+1) + p)
-				if i < len(parts)-1 {
-					b.WriteString(",")
-				}
-				b.WriteString("\n")
-			}
-			b.WriteString(in(level) + cl)
-			return b.String(), nil
-		}
-		j := ", "
-		if tight {
-			j = ","
-		}
-		return open + strings.Join(parts, j) + cl, nil
-	case yaml.AliasNode:
-		return "", fail(ExitUsage, "aliases (*%s) cannot be written into JSON or flow context", y.Value)
-	}
-	switch y.Tag {
-	case "!!null":
-		return "null", nil
-	case "!!bool":
-		return strings.ToLower(y.Value), nil
-	case "!!int", "!!float":
-		if jsonNum.MatchString(y.Value) {
-			return y.Value, nil
-		}
-	}
-	return jsonStr(y.Value), nil
-}
-
-// flowText renders the new content for a JSON/flow context at node n.
-func (t *newText) flowText(n *Node) (string, error) {
-	d := n.Doc
-	pretty := d.JSONish && d.pretty()
-	tight := d.JSONish && !pretty
-	s, err := toJSON(t.y(), pretty, tight, d.jsonUnit(), 0)
-	if err != nil {
-		return "", err
-	}
-	if pretty {
-		s = strings.ReplaceAll(s, "\n", d.EOL+d.lineIndent(n.EntryStart))
-	}
-	return s, nil
-}
-
 func splice(src []byte, a, b int, repl string) []byte {
 	out := make([]byte, 0, len(src)-(b-a)+len(repl))
 	out = append(out, src[:a]...)
@@ -254,76 +168,35 @@ func (n *Node) hasHeader() bool {
 	return l2 > l1
 }
 
+// region is a byte range of the document and the text that replaces it.
+type region struct {
+	a, b int
+	repl string
+}
+
 func (n *Node) setEdit(t *newText) ([]byte, error) {
 	d := n.Doc
-	eol := d.EOL
-	lines := t.lines
-	a, b := n.ValStart, n.ValEnd
-	var repl string
+	var r region
 	switch {
 	case n.hasHeader() && t.blockColl() && (n.Val.Anchor != "" || n.Val.Style&yaml.TaggedStyle != 0):
-		// keep the anchor/tag header; replace only the body
-		hdr := strings.TrimSpace(string(d.Src[n.ValStart:d.lineEnd(n.ValStart)]))
-		if i := strings.Index(hdr, " #"); i >= 0 {
-			hdr = strings.TrimSpace(hdr[:i])
+		var err error
+		if r, err = n.setBody(t); err != nil {
+			return nil, err
 		}
-		if len(lines) > 0 && propsLine.MatchString(lines[0]) {
-			if strings.Join(strings.Fields(lines[0]), " ") != strings.Join(strings.Fields(hdr), " ") {
-				return nil, fail(ExitUsage, "input changes the anchor/tag %q of this node; refusing", hdr)
-			}
-			lines = lines[1:]
-		}
-		c := d.col(n.Kids[0].EntryStart)
-		a = d.lineStart(n.Kids[0].EntryStart)
-		repl = joinPref(lines, sp(c), sp(c), eol)
 	case n.flowParent() || d.JSONish:
 		s, err := t.flowText(n)
 		if err != nil {
 			return nil, err
 		}
-		repl = s
+		r = region{n.ValStart, n.ValEnd, s}
 	case n.Parent == nil:
-		repl = joinPref(lines, "", sp(d.col(n.ValStart)), eol)
+		r = region{n.ValStart, n.ValEnd, joinPref(t.lines, "", sp(d.col(n.ValStart)), d.EOL)}
 	case n.Key != nil:
-		ki := d.col(n.EntryStart)
-		u := d.indentUnit()
-		empty := n.ValStart == n.ValEnd
-		sameLine := !bytes.Contains(d.Src[n.AfterColon:n.ValStart], []byte("\n"))
-		switch {
-		case t.blockColl() && sameLine:
-			a = n.AfterColon
-			cm := ""
-			if e := d.lineEnd(b); b < e {
-				if tail := strings.TrimSpace(string(d.Src[b:e])); strings.HasPrefix(tail, "#") {
-					cm, b = " "+tail, e
-					if d.Src[e-1] == '\r' {
-						b = e - 1
-					}
-				}
-			}
-			repl = cm + eol + joinPref(lines, sp(ki+u), sp(ki+u), eol)
-		case t.blockColl():
-			c := d.col(n.ValStart)
-			a = d.lineStart(n.ValStart)
-			repl = joinPref(lines, sp(c), sp(c), eol)
-		case sameLine && !empty:
-			repl = joinPref(lines, "", restP(lines, ki, u), eol)
-		case sameLine:
-			repl = " " + joinPref(lines, "", restP(lines, ki, u), eol)
-		default:
-			a = n.AfterColon
-			repl = " " + joinPref(lines, "", restP(lines, ki, u), eol)
-		}
-	default: // block sequence item
-		if n.ValStart == n.ValEnd {
-			repl = " " + joinPref(lines, "", restP(lines, d.col(n.EntryStart), 2), eol)
-		} else if t.blockColl() {
-			repl = joinPref(lines, "", sp(d.col(n.ValStart)), eol)
-		} else {
-			repl = joinPref(lines, "", restP(lines, d.col(n.EntryStart), 2), eol)
-		}
+		r = n.setMapValue(t)
+	default:
+		r = n.setSeqItem(t)
 	}
-	out := splice(d.Src, a, b, repl)
+	out := splice(d.Src, r.a, r.b, r.repl)
 	if err := verifyAt(out, n.Segs(), func(m *Node) error {
 		if !equalNode(m.Val, t.y()) {
 			return fmt.Errorf("written value does not match the input")
@@ -333,6 +206,67 @@ func (n *Node) setEdit(t *newText) ([]byte, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+// setBody replaces only the children of a block collection whose anchor or
+// tag sits on the key line, keeping that header.
+func (n *Node) setBody(t *newText) (region, error) {
+	d := n.Doc
+	lines := t.lines
+	hdr := strings.TrimSpace(string(d.Src[n.ValStart:d.lineEnd(n.ValStart)]))
+	if i := strings.Index(hdr, " #"); i >= 0 {
+		hdr = strings.TrimSpace(hdr[:i])
+	}
+	if len(lines) > 0 && propsLine.MatchString(lines[0]) {
+		if strings.Join(strings.Fields(lines[0]), " ") != strings.Join(strings.Fields(hdr), " ") {
+			return region{}, fail(ExitUsage, "input changes the anchor/tag %q of this node; refusing", hdr)
+		}
+		lines = lines[1:]
+	}
+	c := d.col(n.Kids[0].EntryStart)
+	return region{d.lineStart(n.Kids[0].EntryStart), n.ValEnd, joinPref(lines, sp(c), sp(c), d.EOL)}, nil
+}
+
+// setMapValue places new content as the value of a block mapping entry.
+func (n *Node) setMapValue(t *newText) region {
+	d, eol, lines := n.Doc, n.Doc.EOL, t.lines
+	ki, u := d.col(n.EntryStart), d.indentUnit()
+	empty := n.ValStart == n.ValEnd
+	sameLine := !bytes.Contains(d.Src[n.AfterColon:n.ValStart], []byte("\n"))
+	switch {
+	case t.blockColl() && sameLine:
+		// move a trailing "# comment" up to the key line
+		b, cm := n.ValEnd, ""
+		if e := d.lineEnd(b); b < e {
+			if tail := strings.TrimSpace(string(d.Src[b:e])); strings.HasPrefix(tail, "#") {
+				cm, b = " "+tail, e
+				if d.Src[e-1] == '\r' {
+					b = e - 1
+				}
+			}
+		}
+		return region{n.AfterColon, b, cm + eol + joinPref(lines, sp(ki+u), sp(ki+u), eol)}
+	case t.blockColl():
+		c := d.col(n.ValStart)
+		return region{d.lineStart(n.ValStart), n.ValEnd, joinPref(lines, sp(c), sp(c), eol)}
+	case sameLine && !empty:
+		return region{n.ValStart, n.ValEnd, joinPref(lines, "", restP(lines, ki, u), eol)}
+	case sameLine:
+		return region{n.ValStart, n.ValEnd, " " + joinPref(lines, "", restP(lines, ki, u), eol)}
+	}
+	return region{n.AfterColon, n.ValEnd, " " + joinPref(lines, "", restP(lines, ki, u), eol)}
+}
+
+// setSeqItem places new content as a block sequence item.
+func (n *Node) setSeqItem(t *newText) region {
+	d, eol, lines := n.Doc, n.Doc.EOL, t.lines
+	switch {
+	case n.ValStart == n.ValEnd:
+		return region{n.ValStart, n.ValEnd, " " + joinPref(lines, "", restP(lines, d.col(n.EntryStart), 2), eol)}
+	case t.blockColl():
+		return region{n.ValStart, n.ValEnd, joinPref(lines, "", sp(d.col(n.ValStart)), eol)}
+	}
+	return region{n.ValStart, n.ValEnd, joinPref(lines, "", restP(lines, d.col(n.EntryStart), 2), eol)}
 }
 
 func verifyAt(out []byte, segs []string, check func(*Node) error) error {
@@ -544,196 +478,4 @@ func (n *Node) rmEdit() ([]byte, error) {
 		return nil, err
 	}
 	return out, nil
-}
-
-// ---- command plumbing ----
-
-type edited struct {
-	doc  *Doc
-	out  []byte
-	segs []string // node whose hash is reported with -o json
-}
-
-func checkExpect(expect string, n *Node, w *WS) error {
-	if expect == "" {
-		return nil
-	}
-	e := strings.ToLower(expect)
-	if len(e) < 6 {
-		return fail(ExitUsage, "--expect needs at least 6 hex characters of the hash from 'oq get -o columns=hash'")
-	}
-	h := hashOf(n.DisplayText())
-	if !strings.HasPrefix(h, e) {
-		return fail(ExitStale, "stale: %s has hash %s, expected %s", w.Addr(n), h, expect)
-	}
-	return nil
-}
-
-func (c *cli) readNew(o *opts, spec string) (*newText, error) {
-	var raw []byte
-	var err error
-	switch {
-	case o.file != "":
-		raw, err = os.ReadFile(o.file)
-	case spec == "-":
-		return nil, fail(ExitUsage, "the spec is on stdin; pass the new content with --file")
-	default:
-		raw, err = c.stdin()
-	}
-	if err != nil {
-		return nil, fail(ExitUsage, "reading new content: %v", err)
-	}
-	return prepText(raw)
-}
-
-func (c *cli) finish(o *opts, spec string, apply func() (*edited, error)) (*result, error) {
-	e, err := apply()
-	if err != nil {
-		return nil, err
-	}
-	if !o.inPlace {
-		if o.format != "" {
-			return nil, fail(ExitUsage, "-o on a write command needs -i")
-		}
-		return &result{data: e.out}, nil
-	}
-	if e.doc.Abs == "" {
-		return nil, fail(ExitUsage, "-i needs a file, not stdin")
-	}
-	path := e.doc.Abs
-	if r, err := filepath.EvalSymlinks(path); err == nil {
-		path = r
-	}
-	unlock := lockDir(filepath.Dir(path))
-	defer unlock()
-	for try := 0; try < 5; try++ {
-		if try > 0 {
-			if e, err = apply(); err != nil {
-				return nil, err
-			}
-		}
-		tmp, err := os.CreateTemp(filepath.Dir(path), ".oq-*")
-		if err != nil {
-			return nil, fail(ExitUsage, "%v", err)
-		}
-		if st, err := os.Stat(path); err == nil {
-			tmp.Chmod(st.Mode().Perm())
-		}
-		_, werr := tmp.Write(e.out)
-		if werr == nil {
-			werr = tmp.Sync()
-		}
-		tmp.Close()
-		if werr != nil {
-			os.Remove(tmp.Name())
-			return nil, fail(ExitUsage, "%v", werr)
-		}
-		cur, _ := os.ReadFile(path)
-		if !bytes.Equal(cur, e.doc.Src) {
-			os.Remove(tmp.Name())
-			continue
-		}
-		if err := os.Rename(tmp.Name(), path); err != nil {
-			os.Remove(tmp.Name())
-			return nil, fail(ExitUsage, "%v", err)
-		}
-		if o.format != "" {
-			nd, err := ParseDoc("", "", e.out)
-			if err != nil {
-				return nil, fail(ExitUsage, "%v", err)
-			}
-			h := ""
-			if m := nd.Root.Descend(e.segs); m != nil {
-				h = hashOf(m.DisplayText())
-			}
-			rec := Rec{{"address", ptrString(e.segs)}, {"file", filepath.Base(path)}, {"hash", h}}
-			data, err := recOut(rec, o)
-			if err != nil {
-				return nil, err
-			}
-			return &result{data: data}, nil
-		}
-		return nil, nil
-	}
-	return nil, fail(ExitStale, "stale: %s kept changing while writing", filepath.Base(path))
-}
-
-func cmdSet(c *cli, o *opts) (*result, error) {
-	if err := need(o, 2, 2, "oq set <spec> <addr> [--expect H] [-i]"); err != nil {
-		return nil, err
-	}
-	t, err := c.readNew(o, o.pos[0])
-	if err != nil {
-		return nil, err
-	}
-	return c.finish(o, o.pos[0], func() (*edited, error) {
-		w, err := c.workspace(o.pos[0])
-		if err != nil {
-			return nil, err
-		}
-		n, err := w.Resolve(o.pos[1])
-		if err != nil {
-			return nil, err
-		}
-		if err := checkExpect(o.expect, n, w); err != nil {
-			return nil, err
-		}
-		out, err := n.setEdit(t)
-		if err != nil {
-			return nil, err
-		}
-		return &edited{n.Doc, out, n.Segs()}, nil
-	})
-}
-
-func cmdInsert(c *cli, o *opts) (*result, error) {
-	if err := need(o, 2, 2, "oq insert <spec> <addr> [--after KEY] [-i]"); err != nil {
-		return nil, err
-	}
-	t, err := c.readNew(o, o.pos[0])
-	if err != nil {
-		return nil, err
-	}
-	return c.finish(o, o.pos[0], func() (*edited, error) {
-		w, err := c.workspace(o.pos[0])
-		if err != nil {
-			return nil, err
-		}
-		n, err := w.Resolve(o.pos[1])
-		if err != nil {
-			return nil, err
-		}
-		if err := checkExpect(o.expect, n, w); err != nil {
-			return nil, err
-		}
-		out, err := n.insertEdit(t, o.after, o.afterSet)
-		if err != nil {
-			return nil, err
-		}
-		return &edited{n.Doc, out, n.Segs()}, nil
-	})
-}
-
-func cmdRm(c *cli, o *opts) (*result, error) {
-	if err := need(o, 2, 2, "oq rm <spec> <addr> [--expect H] [-i]"); err != nil {
-		return nil, err
-	}
-	return c.finish(o, o.pos[0], func() (*edited, error) {
-		w, err := c.workspace(o.pos[0])
-		if err != nil {
-			return nil, err
-		}
-		n, err := w.Resolve(o.pos[1])
-		if err != nil {
-			return nil, err
-		}
-		if err := checkExpect(o.expect, n, w); err != nil {
-			return nil, err
-		}
-		out, err := n.rmEdit()
-		if err != nil {
-			return nil, err
-		}
-		return &edited{n.Doc, out, n.Parent.Segs()}, nil
-	})
 }

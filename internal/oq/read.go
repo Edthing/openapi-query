@@ -1,7 +1,6 @@
 package oq
 
 import (
-	"bytes"
 	"fmt"
 	"strconv"
 	"strings"
@@ -373,5 +372,3 @@ func (w *WS) enclosing(n *Node) string {
 	}
 	return w.AddrOf(n.Doc, segs[:cut])
 }
-
-var _ = bytes.MinRead

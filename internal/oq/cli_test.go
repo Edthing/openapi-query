@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -226,7 +227,7 @@ func TestConcurrentInPlace(t *testing.T) {
 	done := make(chan int, 12)
 	for i := 0; i < 12; i++ {
 		go func(i int) {
-			_, _, code := run(t, "k"+itoa(i)+": v\n", "insert", f, "/info", "-i")
+			_, _, code := run(t, "k"+strconv.Itoa(i)+": v\n", "insert", f, "/info", "-i")
 			done <- code
 		}(i)
 	}
@@ -388,4 +389,65 @@ func TestGetFormats(t *testing.T) {
 	if _, errs, code := run(t, "", "get", pet, "/info", "-o", "tsv"); code != ExitUsage || !strings.Contains(errs, "--metadata") {
 		t.Errorf("get -o tsv: %d %q", code, errs)
 	}
+}
+
+func TestEditsCRLF(t *testing.T) {
+	src, _ := os.ReadFile(td("petstore.yaml"))
+	crlf := strings.ReplaceAll(string(src), "\n", "\r\n")
+	f := filepath.Join(t.TempDir(), "crlf.yaml")
+	os.WriteFile(f, []byte(crlf), 0o644)
+	steps := [][]string{
+		{"set", f, "schema:Error"}, {"insert", f, "/components/schemas"}, {"rm", f, "schema:Owner"},
+	}
+	inputs := []string{"type: object\nproperties:\n  code:\n    type: integer\n", "Tag:\n  type: string\n", ""}
+	for i, st := range steps {
+		if _, errs, code := run(t, inputs[i], append(st, "-i")...); code != 0 {
+			t.Fatalf("%v: %d %s", st, code, errs)
+		}
+	}
+	got, _ := os.ReadFile(f)
+	if strings.Count(string(got), "\n") != strings.Count(string(got), "\r\n") {
+		t.Errorf("mixed line endings after edits")
+	}
+	if !strings.Contains(string(got), "    Tag:\r\n      type: string\r\n") || strings.Contains(string(got), "Owner:") {
+		t.Errorf("edits missing:\n%s", got)
+	}
+}
+
+func TestUnicodeKeys(t *testing.T) {
+	doc := "info:\n  título: Café ☕\n  other: 1\nz:\n  ключ:\n    - 日本語\n    - b\n"
+	out, _, code := run(t, doc, "get", "-", "/z/ключ/0")
+	if code != 0 || out != "日本語\n" {
+		t.Fatalf("got %q %d", out, code)
+	}
+	f := writeTemp(t, doc)
+	if _, errs, code := run(t, "Tea\n", "set", f, "/info/título", "-i"); code != 0 {
+		t.Fatalf("%d %s", code, errs)
+	}
+	got, _ := os.ReadFile(f)
+	if string(got) != strings.Replace(doc, "Café ☕", "Tea", 1) {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestJSONWithTabs(t *testing.T) {
+	doc := "{\n\t\"a\": {\n\t\t\"x\": 1,\n\t\t\"y\": 2\n\t},\n\t\"b\": 3\n}\n"
+	f := writeTemp(t, doc)
+	if _, errs, code := run(t, "z: [1, 2]\n", "insert", f, "/a", "--after", "x", "-i"); code != 0 {
+		t.Fatalf("%d %s", code, errs)
+	}
+	got, _ := os.ReadFile(f)
+	want := "{\n\t\"a\": {\n\t\t\"x\": 1,\n\t\t\"z\": [\n\t\t\t1,\n\t\t\t2\n\t\t],\n\t\t\"y\": 2\n\t},\n\t\"b\": 3\n}\n"
+	if string(got) != want {
+		t.Errorf("got\n%s\nwant\n%s", got, want)
+	}
+}
+
+func writeTemp(t *testing.T, content string) string {
+	t.Helper()
+	f := filepath.Join(t.TempDir(), "s.yaml")
+	if err := os.WriteFile(f, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return f
 }
