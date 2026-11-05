@@ -29,12 +29,13 @@ func fail(code int, format string, a ...any) error {
 
 // WS is the set of files reachable from one root spec.
 type WS struct {
-	Base  string
-	Root  *Doc
-	docs  map[string]*Doc
-	errs  map[string]error
-	ops   []Op
-	opsOK bool
+	Base     string
+	Root     *Doc
+	docs     map[string]*Doc
+	errs     map[string]error
+	ops      []Op
+	opsOK    bool
+	refCache map[refKey]RefTarget
 }
 
 func NewWS(path string, stdin []byte) (*WS, error) {

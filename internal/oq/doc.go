@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"slices"
 	"strconv"
 	"unicode/utf8"
 
@@ -18,6 +19,9 @@ type Doc struct {
 	Root    *Node
 	EOL     string
 	JSONish bool
+	sites   []RefSite // $ref sites, see allRefs
+	sitesOK bool
+	ascii   bool // all bytes < 0x80: columns equal byte offsets
 	lines   []int
 	unit    int
 }
@@ -30,6 +34,8 @@ type Node struct {
 	Key    *yaml.Node
 	Val    *yaml.Node
 	Kids   []*Node
+	Index  int // position in Parent.Kids
+	byKey  map[string]*Node
 
 	EntryStart int // start of key (mapping), dash (block sequence) or value
 	ValStart   int
@@ -59,10 +65,14 @@ func ParseDoc(abs, disp string, src []byte) (*Doc, error) {
 	if bytes.Contains(src, []byte("\r\n")) {
 		d.EOL = "\r\n"
 	}
+	d.ascii = true
 	d.lines = append(d.lines, 0)
 	for i, c := range src {
 		if c == '\n' {
 			d.lines = append(d.lines, i+1)
+		}
+		if c >= 0x80 {
+			d.ascii = false
 		}
 	}
 	y := top.Content[0]
@@ -92,6 +102,13 @@ func (d *Doc) off(line, col int) int {
 		return len(d.Src)
 	}
 	p := d.lines[line-1]
+	if d.ascii {
+		end := len(d.Src)
+		if line < len(d.lines) {
+			end = d.lines[line] - 1 // the '\n' ending this line
+		}
+		return min(p+max(col, 1)-1, end)
+	}
 	for c := 1; c < col && p < len(d.Src) && d.Src[p] != '\n'; c++ {
 		_, w := utf8.DecodeRune(d.Src[p:])
 		p += w
@@ -113,12 +130,14 @@ func (d *Doc) Pos(p int) (line, col int) {
 			hi = m
 		}
 	}
+	if d.ascii {
+		return lo + 1, p - d.lines[lo] + 1
+	}
 	return lo + 1, utf8.RuneCount(d.Src[d.lines[lo]:p]) + 1
 }
 
 func (d *Doc) lineStart(p int) int {
-	l, _ := d.Pos(p)
-	return d.lines[l-1]
+	return bytes.LastIndexByte(d.Src[:min(p, len(d.Src))], '\n') + 1
 }
 
 func (d *Doc) lineEnd(p int) int { // index of '\n' or len
@@ -146,13 +165,22 @@ func (n *Node) Segs() []string {
 	for m := n; m.Parent != nil; m = m.Parent {
 		s = append(s, m.Seg)
 	}
-	for i, j := 0, len(s)-1; i < j; i, j = i+1, j-1 {
-		s[i], s[j] = s[j], s[i]
-	}
+	slices.Reverse(s)
 	return s
 }
 
 func (n *Node) Child(seg string) *Node {
+	if len(n.Kids) > 16 { // large maps (paths, schemas): index on first use
+		if n.byKey == nil {
+			n.byKey = make(map[string]*Node, len(n.Kids))
+			for _, k := range n.Kids {
+				if _, dup := n.byKey[k.Seg]; !dup {
+					n.byKey[k.Seg] = k
+				}
+			}
+		}
+		return n.byKey[seg]
+	}
 	for _, k := range n.Kids {
 		if k.Seg == seg {
 			return k
@@ -160,6 +188,17 @@ func (n *Node) Child(seg string) *Node {
 	}
 	return nil
 }
+
+// ScalarChild returns the value of a scalar child, if there is one.
+func (n *Node) ScalarChild(seg string) (string, bool) {
+	if k := n.Child(seg); k != nil && k.Val.Kind == yaml.ScalarNode {
+		return k.Val.Value, true
+	}
+	return "", false
+}
+
+// tokens is the approximate token count of the node's text, without copying it.
+func (n *Node) tokens() Tok { return tokensOfBytes(n.Doc.Src[n.ValStart:n.ValEnd]) }
 
 // expand creates children and computes ends. bound is the exclusive limit
 // (next sibling's start or the parent's limit).
@@ -177,6 +216,7 @@ func (d *Doc) expand(n *Node, bound int) {
 			kid.EntryStart = d.off(k.Line, k.Column)
 			kid.ValStart = d.off(v.Line, v.Column)
 			kid.AfterColon = d.colonAfter(k, kid.EntryStart, kid.ValStart)
+			kid.Index = len(n.Kids)
 			n.Kids = append(n.Kids, kid)
 		}
 	case yaml.SequenceNode:
@@ -187,6 +227,7 @@ func (d *Doc) expand(n *Node, bound int) {
 			if !flow {
 				kid.EntryStart = d.dashBefore(kid.ValStart)
 			}
+			kid.Index = len(n.Kids)
 			n.Kids = append(n.Kids, kid)
 		}
 	}

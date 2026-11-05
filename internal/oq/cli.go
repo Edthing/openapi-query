@@ -1,6 +1,7 @@
 package oq
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -29,8 +30,7 @@ type opts struct {
 	tsv        bool // -o tsv given explicitly
 	metadata   bool
 	maxTokens  int
-	depth      int
-	depthSet   bool
+	depth      int // --depth, default 1
 	expect     string
 	inPlace    bool
 	after      string
@@ -105,20 +105,18 @@ func (c *cli) run(args []string) (int, error) {
 		return ExitUsage, nil
 	}
 	switch args[0] {
-	case "help", "-h", "--help":
-		if len(args) == 1 || args[0] != "help" {
-			fmt.Fprint(c.out, helpText)
-			return 0, nil
-		}
+	case "-h", "--help":
+		fmt.Fprint(c.out, helpText)
+		return 0, nil
 	case "version", "--version":
 		fmt.Fprintln(c.out, "oq "+version())
 		return 0, nil
-	}
-	if args[0] == "help" && len(args) > 1 {
-		if sp, ok := commands[args[1]]; ok {
-			fmt.Fprint(c.out, cmdHelp(args[1], sp))
+	case "help": // oq help [command]
+		if len(args) == 1 {
+			fmt.Fprint(c.out, helpText)
 			return 0, nil
 		}
+		args = []string{args[1], "--help"}
 	}
 	spec, ok := commands[args[0]]
 	if !ok {
@@ -139,7 +137,8 @@ func (c *cli) run(args []string) (int, error) {
 	}
 	res, err := spec.fn(c, o)
 	if err != nil {
-		if ee, ok := err.(*ExitError); ok {
+		var ee *ExitError
+		if errors.As(err, &ee) {
 			return ee.Code, ee
 		}
 		return ExitUsage, err
@@ -162,7 +161,7 @@ func (c *cli) run(args []string) (int, error) {
 }
 
 func parseOpts(args []string, spec cmdSpec) (*opts, error) {
-	o := &opts{maxTokens: defaultCap}
+	o := &opts{maxTokens: defaultCap, depth: 1}
 	allowed := map[string]bool{"-o": true, "--output": true, "--max-tokens": true, "-h": true, "--help": true}
 	for _, f := range strings.Fields(spec.flags) {
 		allowed[f] = true
@@ -193,7 +192,7 @@ func parseOpts(args []string, spec cmdSpec) (*opts, error) {
 		if !allowed[name] {
 			return nil, fmt.Errorf("unknown or unsupported flag %s", name)
 		}
-		need := func() (string, error) {
+		value := func() (string, error) {
 			if hasVal {
 				return val, nil
 			}
@@ -207,19 +206,8 @@ func parseOpts(args []string, spec cmdSpec) (*opts, error) {
 		var v string
 		switch name {
 		case "-o", "--output":
-			if v, err = need(); err == nil {
-				switch lv := strings.ToLower(v); {
-				case lv == "tsv" || lv == "text" || lv == "raw":
-					o.format = ""
-					o.tsv = lv == "tsv"
-				case lv == "json" || lv == "yaml" || lv == "name":
-					o.format = lv
-				case strings.HasPrefix(lv, "columns=") && len(lv) > 8:
-					o.format = "columns"
-					o.columns = strings.Split(v[8:], ",")
-				default:
-					err = fmt.Errorf("want tsv, json, yaml, name or columns=a,b")
-				}
+			if v, err = value(); err == nil {
+				err = o.setOutput(v)
 			}
 		case "-h", "--help":
 			o.help = true
@@ -232,33 +220,49 @@ func parseOpts(args []string, spec cmdSpec) (*opts, error) {
 		case "--unresolved":
 			o.unresolved = true
 		case "--max-tokens":
-			if v, err = need(); err == nil {
-				o.maxTokens, err = strconv.Atoi(v)
-				if err == nil && o.maxTokens < 0 {
-					err = fmt.Errorf("must be >= 0")
-				}
+			if v, err = value(); err == nil {
+				o.maxTokens, err = atoiMin(v, 0)
 			}
 		case "--depth":
-			if v, err = need(); err == nil {
-				o.depth, err = strconv.Atoi(v)
-				o.depthSet = true
-				if err == nil && o.depth < 1 {
-					err = fmt.Errorf("must be >= 1")
-				}
+			if v, err = value(); err == nil {
+				o.depth, err = atoiMin(v, 1)
 			}
 		case "--expect":
-			o.expect, err = need()
+			o.expect, err = value()
 		case "--after":
-			o.after, err = need()
+			o.after, err = value()
 			o.afterSet = true
 		case "--file", "-f":
-			o.file, err = need()
+			o.file, err = value()
 		}
 		if err != nil {
 			return nil, fmt.Errorf("bad value for %s: %v", name, err)
 		}
 	}
 	return o, nil
+}
+
+func atoiMin(s string, min int) (int, error) {
+	n, err := strconv.Atoi(s)
+	if err == nil && n < min {
+		err = fmt.Errorf("must be >= %d", min)
+	}
+	return n, err
+}
+
+// setOutput parses the value of -o/--output.
+func (o *opts) setOutput(v string) error {
+	switch lv := strings.ToLower(v); {
+	case lv == "tsv" || lv == "text" || lv == "raw":
+		o.format, o.tsv = "", lv == "tsv"
+	case lv == "json" || lv == "yaml" || lv == "name":
+		o.format = lv
+	case strings.HasPrefix(lv, "columns=") && len(lv) > 8:
+		o.format, o.columns = "columns", strings.Split(v[8:], ",")
+	default:
+		return fmt.Errorf("want tsv, json, yaml, name or columns=a,b")
+	}
+	return nil
 }
 
 // stdinPiped reports whether stdin is a pipe or file rather than a terminal.

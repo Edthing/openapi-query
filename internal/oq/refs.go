@@ -2,7 +2,6 @@ package oq
 
 import (
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
@@ -22,6 +21,24 @@ type RefTarget struct {
 func (t RefTarget) Resolved() bool { return t.Node != nil }
 
 func (w *WS) ParseRef(from *Doc, raw string) RefTarget {
+	key := refKey{from, raw}
+	if t, ok := w.refCache[key]; ok {
+		return t
+	}
+	t := w.parseRef(from, raw)
+	if w.refCache == nil {
+		w.refCache = map[refKey]RefTarget{}
+	}
+	w.refCache[key] = t
+	return t
+}
+
+type refKey struct {
+	from *Doc
+	raw  string
+}
+
+func (w *WS) parseRef(from *Doc, raw string) RefTarget {
 	t := RefTarget{Raw: raw}
 	file, frag := raw, ""
 	if i := strings.IndexByte(raw, '#'); i >= 0 {
@@ -73,13 +90,27 @@ type RefSite struct {
 // refSites collects every "$ref": "<string>" under n (not following aliases).
 func refSites(n *Node, out *[]RefSite) {
 	if n.Val.Kind == yaml.MappingNode {
-		if r := n.Child("$ref"); r != nil && r.Val.Kind == yaml.ScalarNode && r.Val.Tag == "!!str" {
-			*out = append(*out, RefSite{Node: n, Raw: r.Val.Value})
+		for _, k := range n.Kids { // no Child(): that would index every large map
+			if k.Seg == "$ref" {
+				if k.Val.Kind == yaml.ScalarNode && k.Val.Tag == "!!str" {
+					*out = append(*out, RefSite{Node: n, Raw: k.Val.Value})
+				}
+				break
+			}
 		}
 	}
 	for _, k := range n.Kids {
 		refSites(k, out)
 	}
+}
+
+// allRefs lists every $ref site in the document, computed once.
+func (d *Doc) allRefs() []RefSite {
+	if !d.sitesOK {
+		refSites(d.Root, &d.sites)
+		d.sitesOK = true
+	}
+	return d.sites
 }
 
 // Closure loads every file reachable via $ref from the root and returns docs
@@ -88,9 +119,13 @@ func (w *WS) Closure() []*Doc {
 	docs := []*Doc{w.Root}
 	seen := map[*Doc]bool{w.Root: true}
 	for i := 0; i < len(docs); i++ {
-		var sites []RefSite
-		refSites(docs[i].Root, &sites)
-		for _, s := range sites {
+		files := map[string]bool{} // only the first ref to each file needs loading
+		for _, s := range docs[i].allRefs() {
+			file, _, _ := strings.Cut(s.Raw, "#")
+			if file == "" || files[file] {
+				continue
+			}
+			files[file] = true
 			t := w.ParseRef(docs[i], s.Raw)
 			if t.Doc != nil && !seen[t.Doc] {
 				seen[t.Doc] = true
@@ -108,13 +143,4 @@ func (w *WS) MissingFiles() map[string]error {
 		out[w.rel(abs)] = e
 	}
 	return out
-}
-
-func sortedKeys[V any](m map[string]V) []string {
-	k := make([]string, 0, len(m))
-	for s := range m {
-		k = append(k, s)
-	}
-	sort.Strings(k)
-	return k
 }

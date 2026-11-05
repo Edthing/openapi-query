@@ -38,12 +38,12 @@ func prepText(raw []byte) (*newText, error) {
 	if len(lines) == 0 {
 		return nil, fail(ExitUsage, "new content is empty")
 	}
-	ind := len(lines[0]) - len(strings.TrimLeft(lines[0], " "))
+	ind := leadSpaces(lines[0])
 	if ind > 0 {
 		for j, l := range lines {
 			if strings.TrimSpace(l) == "" {
 				lines[j] = ""
-			} else if strings.HasPrefix(l, strings.Repeat(" ", ind)) {
+			} else if strings.HasPrefix(l, sp(ind)) {
 				lines[j] = l[ind:]
 			}
 		}
@@ -54,6 +54,8 @@ func prepText(raw []byte) (*newText, error) {
 	}
 	return &newText{lines: lines, doc: d}, nil
 }
+
+func leadSpaces(s string) int { return len(s) - len(strings.TrimLeft(s, " ")) }
 
 func sp(n int) string {
 	if n < 0 {
@@ -85,7 +87,7 @@ func restP(lines []string, base, u int) string {
 		if strings.TrimSpace(l) == "" {
 			continue
 		}
-		if i := len(l) - len(strings.TrimLeft(l, " ")); m < 0 || i < m {
+		if i := leadSpaces(l); m < 0 || i < m {
 			m = i
 		}
 	}
@@ -227,34 +229,44 @@ func (n *Node) setBody(t *newText) (region, error) {
 	return region{d.lineStart(n.Kids[0].EntryStart), n.ValEnd, joinPref(lines, sp(c), sp(c), d.EOL)}, nil
 }
 
+// trailingComment returns a "# comment" that follows position p on its line,
+// as text to move elsewhere, and the offset to cut up to (p if there is none).
+func (d *Doc) trailingComment(p int) (string, int) {
+	e := d.lineEnd(p)
+	if p >= e {
+		return "", p
+	}
+	tail := strings.TrimSpace(string(d.Src[p:e]))
+	if !strings.HasPrefix(tail, "#") {
+		return "", p
+	}
+	if d.Src[e-1] == '\r' {
+		e--
+	}
+	return " " + tail, e
+}
+
 // setMapValue places new content as the value of a block mapping entry.
 func (n *Node) setMapValue(t *newText) region {
 	d, eol, lines := n.Doc, n.Doc.EOL, t.lines
 	ki, u := d.col(n.EntryStart), d.indentUnit()
-	empty := n.ValStart == n.ValEnd
 	sameLine := !bytes.Contains(d.Src[n.AfterColon:n.ValStart], []byte("\n"))
 	switch {
 	case t.blockColl() && sameLine:
-		// move a trailing "# comment" up to the key line
-		b, cm := n.ValEnd, ""
-		if e := d.lineEnd(b); b < e {
-			if tail := strings.TrimSpace(string(d.Src[b:e])); strings.HasPrefix(tail, "#") {
-				cm, b = " "+tail, e
-				if d.Src[e-1] == '\r' {
-					b = e - 1
-				}
-			}
-		}
-		return region{n.AfterColon, b, cm + eol + joinPref(lines, sp(ki+u), sp(ki+u), eol)}
+		cm, end := d.trailingComment(n.ValEnd) // keep the comment on the key line
+		return region{n.AfterColon, end, cm + eol + joinPref(lines, sp(ki+u), sp(ki+u), eol)}
 	case t.blockColl():
 		c := d.col(n.ValStart)
 		return region{d.lineStart(n.ValStart), n.ValEnd, joinPref(lines, sp(c), sp(c), eol)}
-	case sameLine && !empty:
-		return region{n.ValStart, n.ValEnd, joinPref(lines, "", restP(lines, ki, u), eol)}
-	case sameLine:
-		return region{n.ValStart, n.ValEnd, " " + joinPref(lines, "", restP(lines, ki, u), eol)}
 	}
-	return region{n.AfterColon, n.ValEnd, " " + joinPref(lines, "", restP(lines, ki, u), eol)}
+	body := joinPref(lines, "", restP(lines, ki, u), eol)
+	switch {
+	case sameLine && n.ValStart != n.ValEnd: // replace the inline value
+		return region{n.ValStart, n.ValEnd, body}
+	case sameLine: // "key:" with no value yet
+		return region{n.ValStart, n.ValEnd, " " + body}
+	}
+	return region{n.AfterColon, n.ValEnd, " " + body}
 }
 
 // setSeqItem places new content as a block sequence item.
@@ -308,21 +320,19 @@ func equalNode(a, b *yaml.Node) bool {
 // ---- insert ----
 
 func (n *Node) insertEdit(t *newText, after string, hasAfter bool) ([]byte, error) {
-	d := n.Doc
-	eol := d.EOL
-	y, ty := n.Val, t.y()
-	nullEmpty := y.Kind == yaml.ScalarNode && y.Tag == "!!null" && y.Value == ""
+	d, y, ty := n.Doc, n.Val, t.y()
 	if !isColl(ty) {
 		return nil, fail(ExitUsage, "insert expects a mapping or sequence as input")
 	}
-	if nullEmpty || (isColl(y) && len(n.Kids) == 0) {
+	if nullEmpty := y.Kind == yaml.ScalarNode && y.Tag == "!!null" && y.Value == ""; nullEmpty || (isColl(y) && len(n.Kids) == 0) {
 		return n.setEdit(t)
 	}
 	if !isColl(y) || y.Kind != ty.Kind {
 		return nil, fail(ExitUsage, "cannot insert a %s into a %s at %s", kindOf(ty), kindOf(y), ptrString(n.Segs()))
 	}
 	entries := t.doc.Root.Kids
-	if y.Kind == yaml.MappingNode {
+	isMap := y.Kind == yaml.MappingNode
+	if isMap {
 		for _, e := range entries {
 			if n.Child(e.Seg) != nil {
 				return nil, fail(ExitUsage, "key %q already exists at %s (use set)", e.Seg, ptrString(n.Segs()))
@@ -332,7 +342,7 @@ func (n *Node) insertEdit(t *newText, after string, hasAfter bool) ([]byte, erro
 	ref := n.Kids[len(n.Kids)-1]
 	if hasAfter {
 		ref = nil
-		if y.Kind == yaml.MappingNode {
+		if isMap {
 			ref = n.Child(after)
 		} else if i, err := strconv.Atoi(after); err == nil && i >= 0 && i < len(n.Kids) {
 			ref = n.Kids[i]
@@ -341,74 +351,29 @@ func (n *Node) insertEdit(t *newText, after string, hasAfter bool) ([]byte, erro
 			return nil, fail(ExitNotFound, "--after %q: no such entry in %s", after, ptrString(n.Segs()))
 		}
 	}
-	var a int
+	var at int
 	var text string
+	var err error
 	if isFlowColl(y) {
-		pretty := bytes.Contains(d.Src[n.ValStart:n.ValEnd], []byte("\n"))
-		tight := d.JSONish && !pretty
-		li := d.lineIndent(ref.EntryStart)
-		sep := ", "
-		switch {
-		case len(n.Kids) >= 2 && !bytes.Contains(d.Src[n.Kids[0].ValEnd:n.Kids[1].EntryStart], []byte("#")):
-			sep = string(d.Src[n.Kids[0].ValEnd:n.Kids[1].EntryStart])
-		case pretty:
-			sep = "," + eol + li
-		case tight:
-			sep = ","
-		}
-		for _, e := range entries {
-			s, err := toJSON(e.Val, pretty && d.JSONish, tight, d.jsonUnit(), 0)
-			if err != nil {
-				return nil, err
-			}
-			if y.Kind == yaml.MappingNode {
-				sc := ": "
-				if tight {
-					sc = ":"
-				}
-				s = jsonStr(e.Seg) + sc + s
-			}
-			if pretty && d.JSONish {
-				s = strings.ReplaceAll(s, "\n", eol+li)
-			}
-			text += sep + s
-		}
-		a = ref.ValEnd
+		at, text, err = n.insertFlow(entries, ref)
 	} else {
-		lines := t.lines
-		if isFlowColl(ty) {
-			lines = nil
-			for _, e := range entries {
-				s, err := toJSON(e.Val, false, false, "  ", 0)
-				if err != nil {
-					return nil, err
-				}
-				if y.Kind == yaml.MappingNode {
-					lines = append(lines, yamlKey(e.Seg)+": "+s)
-				} else {
-					lines = append(lines, "- "+s)
-				}
-			}
-		}
-		c := d.col(n.Kids[0].EntryStart)
-		a = d.lineEnd(ref.ValEnd)
-		if a > 0 && d.Src[a-1] == '\r' {
-			a--
-		}
-		text = eol + joinPref(lines, sp(c), sp(c), eol)
+		at, text, err = n.insertBlock(t, entries, ref)
 	}
-	out := splice(d.Src, a, a, text)
+	if err != nil {
+		return nil, err
+	}
+	out := splice(d.Src, at, at, text)
 	want := len(n.Kids) + len(entries)
 	if err := verifyAt(out, n.Segs(), func(m *Node) error {
 		if len(m.Kids) != want {
 			return fmt.Errorf("expected %d entries after insert, found %d", want, len(m.Kids))
 		}
+		if !isMap {
+			return nil
+		}
 		for _, e := range entries {
-			if y.Kind == yaml.MappingNode {
-				k := m.Child(e.Seg)
-				if k == nil || !equalNode(k.Val, e.Val) {
-					return fmt.Errorf("inserted key %q does not match the input", e.Seg)
-				}
+			if k := m.Child(e.Seg); k == nil || !equalNode(k.Val, e.Val) {
+				return fmt.Errorf("inserted key %q does not match the input", e.Seg)
 			}
 		}
 		return nil
@@ -418,51 +383,110 @@ func (n *Node) insertEdit(t *newText, after string, hasAfter bool) ([]byte, erro
 	return out, nil
 }
 
-var plainKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.\-]*$`)
+// insertFlow renders entries for a JSON/flow container and returns where to
+// splice them: after ref, separated the way the container already separates.
+func (n *Node) insertFlow(entries []*Node, ref *Node) (int, string, error) {
+	d, eol := n.Doc, n.Doc.EOL
+	multiline := bytes.Contains(d.Src[n.ValStart:n.ValEnd], []byte("\n"))
+	pretty := multiline && d.JSONish
+	tight := d.JSONish && !multiline
+	li := d.lineIndent(ref.EntryStart)
+	sep := ", "
+	switch {
+	case len(n.Kids) >= 2 && !bytes.Contains(d.Src[n.Kids[0].ValEnd:n.Kids[1].EntryStart], []byte("#")):
+		sep = string(d.Src[n.Kids[0].ValEnd:n.Kids[1].EntryStart])
+	case multiline:
+		sep = "," + eol + li
+	case tight:
+		sep = ","
+	}
+	keySep := ": "
+	if tight {
+		keySep = ":"
+	}
+	var text string
+	for _, e := range entries {
+		s, err := toJSON(e.Val, pretty, tight, d.jsonUnit(), 0)
+		if err != nil {
+			return 0, "", err
+		}
+		if n.Val.Kind == yaml.MappingNode {
+			s = jsonStr(e.Seg) + keySep + s
+		}
+		if pretty {
+			s = strings.ReplaceAll(s, "\n", eol+li)
+		}
+		text += sep + s
+	}
+	return ref.ValEnd, text, nil
+}
+
+// insertBlock renders entries for a block container and returns where to
+// splice them: on the lines after ref, indented like its siblings.
+func (n *Node) insertBlock(t *newText, entries []*Node, ref *Node) (int, string, error) {
+	d, eol := n.Doc, n.Doc.EOL
+	lines := t.lines
+	if isFlowColl(t.y()) { // flow input into a block container: one entry per line
+		lines = nil
+		for _, e := range entries {
+			s, err := toJSON(e.Val, false, false, "  ", 0)
+			if err != nil {
+				return 0, "", err
+			}
+			if n.Val.Kind == yaml.MappingNode {
+				lines = append(lines, yamlKey(e.Seg)+": "+s)
+			} else {
+				lines = append(lines, "- "+s)
+			}
+		}
+	}
+	c := d.col(n.Kids[0].EntryStart)
+	at := d.lineEnd(ref.ValEnd)
+	if at > 0 && d.Src[at-1] == '\r' {
+		at--
+	}
+	return at, eol + joinPref(lines, sp(c), sp(c), eol), nil
+}
 
 func yamlKey(k string) string {
-	if plainKey.MatchString(k) && k != "true" && k != "false" && k != "null" {
-		return k
+	if strings.Contains(k, "\n") {
+		return jsonStr(k)
 	}
-	return jsonStr(k)
+	return yamlStr(k, 0)
 }
 
 // ---- rm ----
 
 func (n *Node) rmEdit() ([]byte, error) {
-	d := n.Doc
-	if n.Parent == nil {
+	d, p := n.Doc, n.Parent
+	if p == nil {
 		return nil, fail(ExitUsage, "cannot remove the document root")
 	}
-	var a, b int
-	p := n.Parent
-	idx := 0
-	for i, k := range p.Kids {
-		if k == n {
-			idx = i
-		}
+	var next, prev *Node
+	if n.Index+1 < len(p.Kids) {
+		next = p.Kids[n.Index+1]
 	}
+	if n.Index > 0 {
+		prev = p.Kids[n.Index-1]
+	}
+	var a, b int
 	if isFlowColl(p.Val) {
 		switch {
-		case idx+1 < len(p.Kids):
-			a, b = n.EntryStart, p.Kids[idx+1].EntryStart
-		case idx > 0:
-			a, b = p.Kids[idx-1].ValEnd, n.ValEnd
+		case next != nil:
+			a, b = n.EntryStart, next.EntryStart
+		case prev != nil:
+			a, b = prev.ValEnd, n.ValEnd
 		default:
 			a, b = n.EntryStart, n.ValEnd
 		}
 	} else {
 		ls := d.lineStart(n.EntryStart)
-		own := len(bytes.TrimSpace(d.Src[ls:n.EntryStart])) == 0
 		le := d.lineEnd(n.ValEnd)
 		switch {
-		case own:
-			a, b = ls, le+1
-			if b > len(d.Src) {
-				b = len(d.Src)
-			}
-		case idx+1 < len(p.Kids):
-			a, b = n.EntryStart, p.Kids[idx+1].EntryStart
+		case len(bytes.TrimSpace(d.Src[ls:n.EntryStart])) == 0: // entry owns its lines
+			a, b = ls, min(le+1, len(d.Src))
+		case next != nil: // first key after "- ": join the next one up
+			a, b = n.EntryStart, next.EntryStart
 		default:
 			a, b = n.EntryStart, le
 		}

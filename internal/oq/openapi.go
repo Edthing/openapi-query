@@ -10,8 +10,8 @@ import (
 
 func (w *WS) Version() string {
 	for _, k := range []string{"openapi", "swagger"} {
-		if n := w.Root.Root.Child(k); n != nil && n.Val.Kind == yaml.ScalarNode {
-			return n.Val.Value
+		if v, ok := w.Root.Root.ScalarChild(k); ok {
+			return v
 		}
 	}
 	return ""
@@ -60,8 +60,8 @@ func (w *WS) listOps() []Op {
 	}
 	for _, pi := range paths.Kids {
 		item := pi
-		if r := item.Child("$ref"); r != nil && r.Val.Kind == yaml.ScalarNode {
-			if t := w.ParseRef(item.Doc, r.Val.Value); t.Node != nil {
+		if ref, ok := item.ScalarChild("$ref"); ok {
+			if t := w.ParseRef(item.Doc, ref); t.Node != nil {
 				item = t.Node
 			}
 		}
@@ -71,9 +71,7 @@ func (w *WS) listOps() []Op {
 				continue
 			}
 			id := ""
-			if o := op.Child("operationId"); o != nil && o.Val.Kind == yaml.ScalarNode {
-				id = o.Val.Value
-			}
+			id, _ = op.ScalarChild("operationId")
 			ops = append(ops, Op{Node: op, Method: m, Path: pi.Seg, ID: id})
 		}
 	}

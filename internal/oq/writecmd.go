@@ -9,10 +9,11 @@ import (
 
 // ---- command plumbing ----
 
+// edited is the result of applying one edit to one file.
 type edited struct {
-	doc  *Doc
-	out  []byte
-	segs []string // node whose hash is reported with -o json
+	doc  *Doc     // the file that was edited, as read
+	out  []byte   // its new contents
+	segs []string // node whose hash is reported with -o
 }
 
 func checkExpect(expect string, n *Node, w *WS) error {
@@ -47,7 +48,46 @@ func (c *cli) readNew(o *opts, spec string) (*newText, error) {
 	return prepText(raw)
 }
 
-func (c *cli) finish(o *opts, spec string, apply func() (*edited, error)) (*result, error) {
+// writeAtomic replaces path with out via a temp file in the same directory,
+// but only if the file still holds old. It reports false when it does not.
+func writeAtomic(path string, out, old []byte) (bool, error) {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".oq-*")
+	if err != nil {
+		return false, err
+	}
+	done := false
+	defer func() {
+		if !done {
+			os.Remove(tmp.Name())
+		}
+	}()
+	if st, err := os.Stat(path); err == nil {
+		tmp.Chmod(st.Mode().Perm())
+	}
+	_, err = tmp.Write(out)
+	if err == nil {
+		err = tmp.Sync()
+	}
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return false, err
+	}
+	if cur, _ := os.ReadFile(path); !bytes.Equal(cur, old) {
+		return false, nil
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return false, err
+	}
+	done = true
+	return true, nil
+}
+
+// finish runs apply and writes the result to stdout, or to the file with -i.
+// Under -i it holds a directory lock and re-applies the edit if the file
+// changed between reading and renaming.
+func (c *cli) finish(o *opts, apply func() (*edited, error)) (*result, error) {
 	e, err := apply()
 	if err != nil {
 		return nil, err
@@ -65,69 +105,51 @@ func (c *cli) finish(o *opts, spec string, apply func() (*edited, error)) (*resu
 	if r, err := filepath.EvalSymlinks(path); err == nil {
 		path = r
 	}
-	unlock := lockDir(filepath.Dir(path))
-	defer unlock()
+	defer lockDir(filepath.Dir(path))()
 	for try := 0; try < 5; try++ {
 		if try > 0 {
 			if e, err = apply(); err != nil {
 				return nil, err
 			}
 		}
-		tmp, err := os.CreateTemp(filepath.Dir(path), ".oq-*")
+		ok, err := writeAtomic(path, e.out, e.doc.Src)
 		if err != nil {
 			return nil, fail(ExitUsage, "%v", err)
 		}
-		if st, err := os.Stat(path); err == nil {
-			tmp.Chmod(st.Mode().Perm())
+		if ok {
+			return writeRecord(o, e, path)
 		}
-		_, werr := tmp.Write(e.out)
-		if werr == nil {
-			werr = tmp.Sync()
-		}
-		tmp.Close()
-		if werr != nil {
-			os.Remove(tmp.Name())
-			return nil, fail(ExitUsage, "%v", werr)
-		}
-		cur, _ := os.ReadFile(path)
-		if !bytes.Equal(cur, e.doc.Src) {
-			os.Remove(tmp.Name())
-			continue
-		}
-		if err := os.Rename(tmp.Name(), path); err != nil {
-			os.Remove(tmp.Name())
-			return nil, fail(ExitUsage, "%v", err)
-		}
-		if o.format != "" {
-			nd, err := ParseDoc("", "", e.out)
-			if err != nil {
-				return nil, fail(ExitUsage, "%v", err)
-			}
-			h := ""
-			if m := nd.Root.Descend(e.segs); m != nil {
-				h = hashOf(m.DisplayText())
-			}
-			rec := Rec{{"address", ptrString(e.segs)}, {"file", filepath.Base(path)}, {"hash", h}}
-			data, err := recOut(rec, o)
-			if err != nil {
-				return nil, err
-			}
-			return &result{data: data}, nil
-		}
-		return nil, nil
 	}
 	return nil, fail(ExitStale, "stale: %s kept changing while writing", filepath.Base(path))
 }
 
-func cmdSet(c *cli, o *opts) (*result, error) {
-	if err := need(o, 2, 2, "oq set <spec> <addr> [--expect H] [-i]"); err != nil {
-		return nil, err
+// writeRecord is the -o result of an in-place write: address, file, new hash.
+func writeRecord(o *opts, e *edited, path string) (*result, error) {
+	if o.format == "" {
+		return nil, nil
 	}
-	t, err := c.readNew(o, o.pos[0])
+	nd, err := ParseDoc("", "", e.out)
+	if err != nil {
+		return nil, fail(ExitUsage, "%v", err)
+	}
+	h := ""
+	if m := nd.Root.Descend(e.segs); m != nil {
+		h = hashOf(m.DisplayText())
+	}
+	data, err := render([]Rec{{{"address", ptrString(e.segs)}, {"file", filepath.Base(path)}, {"hash", h}}}, o, true)
 	if err != nil {
 		return nil, err
 	}
-	return c.finish(o, o.pos[0], func() (*edited, error) {
+	return &result{data: data}, nil
+}
+
+// editOp applies one edit to the resolved node and names the node whose
+// hash to report afterwards.
+type editOp func(n *Node) (out []byte, report []string, err error)
+
+// editAt resolves <spec> <addr>, checks --expect and applies op.
+func (c *cli) editAt(o *opts, op editOp) (*result, error) {
+	return c.finish(o, func() (*edited, error) {
 		w, err := c.workspace(o.pos[0])
 		if err != nil {
 			return nil, err
@@ -139,62 +161,51 @@ func cmdSet(c *cli, o *opts) (*result, error) {
 		if err := checkExpect(o.expect, n, w); err != nil {
 			return nil, err
 		}
-		out, err := n.setEdit(t)
+		out, report, err := op(n)
 		if err != nil {
 			return nil, err
 		}
-		return &edited{n.Doc, out, n.Segs()}, nil
+		return &edited{doc: n.Doc, out: out, segs: report}, nil
+	})
+}
+
+func cmdSet(c *cli, o *opts) (*result, error) {
+	if err := need(o, 2, 2, commands["set"].usage); err != nil {
+		return nil, err
+	}
+	t, err := c.readNew(o, o.pos[0])
+	if err != nil {
+		return nil, err
+	}
+	return c.editAt(o, func(n *Node) ([]byte, []string, error) {
+		out, err := n.setEdit(t)
+		return out, n.Segs(), err
 	})
 }
 
 func cmdInsert(c *cli, o *opts) (*result, error) {
-	if err := need(o, 2, 2, "oq insert <spec> <addr> [--after KEY] [-i]"); err != nil {
+	if err := need(o, 2, 2, commands["insert"].usage); err != nil {
 		return nil, err
 	}
 	t, err := c.readNew(o, o.pos[0])
 	if err != nil {
 		return nil, err
 	}
-	return c.finish(o, o.pos[0], func() (*edited, error) {
-		w, err := c.workspace(o.pos[0])
-		if err != nil {
-			return nil, err
-		}
-		n, err := w.Resolve(o.pos[1])
-		if err != nil {
-			return nil, err
-		}
-		if err := checkExpect(o.expect, n, w); err != nil {
-			return nil, err
-		}
+	return c.editAt(o, func(n *Node) ([]byte, []string, error) {
 		out, err := n.insertEdit(t, o.after, o.afterSet)
-		if err != nil {
-			return nil, err
-		}
-		return &edited{n.Doc, out, n.Segs()}, nil
+		return out, n.Segs(), err
 	})
 }
 
 func cmdRm(c *cli, o *opts) (*result, error) {
-	if err := need(o, 2, 2, "oq rm <spec> <addr> [--expect H] [-i]"); err != nil {
+	if err := need(o, 2, 2, commands["rm"].usage); err != nil {
 		return nil, err
 	}
-	return c.finish(o, o.pos[0], func() (*edited, error) {
-		w, err := c.workspace(o.pos[0])
-		if err != nil {
-			return nil, err
-		}
-		n, err := w.Resolve(o.pos[1])
-		if err != nil {
-			return nil, err
-		}
-		if err := checkExpect(o.expect, n, w); err != nil {
-			return nil, err
-		}
+	return c.editAt(o, func(n *Node) ([]byte, []string, error) {
 		out, err := n.rmEdit()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return &edited{n.Doc, out, n.Parent.Segs()}, nil
+		return out, n.Parent.Segs(), nil
 	})
 }

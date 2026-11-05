@@ -6,8 +6,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"regexp"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -26,6 +27,8 @@ type Rec []KV
 type Tok int
 
 func tokensOf(s string) Tok { return Tok((utf8.RuneCountInString(s) + 3) / 4) }
+
+func tokensOfBytes(b []byte) Tok { return Tok((utf8.RuneCount(b) + 3) / 4) }
 
 func jsonStr(v any) string {
 	var b bytes.Buffer
@@ -71,11 +74,7 @@ func (r Rec) yaml(first, rest string) string {
 		case string:
 			v = yamlStr(x, len(rest)+2)
 		case map[string]int:
-			keys := make([]string, 0, len(x))
-			for k := range x {
-				keys = append(keys, k)
-			}
-			sort.Strings(keys)
+			keys := slices.Sorted(maps.Keys(x))
 			parts := make([]string, len(keys))
 			for j, k := range keys {
 				parts[j] = k + ": " + strconv.Itoa(x[k])
@@ -89,62 +88,70 @@ func (r Rec) yaml(first, rest string) string {
 	return b.String()
 }
 
-// render formats records for the -o/--output option.
-func render(recs []Rec, o *opts) ([]byte, error) {
-	switch o.format {
-	case "name":
+func (r Rec) get(name string) (KV, bool) {
+	for _, kv := range r {
+		if kv.K == name {
+			return kv, true
+		}
+	}
+	return KV{}, false
+}
+
+// project applies -o name / -o columns=... to the records.
+func project(recs []Rec, o *opts) ([]Rec, error) {
+	if o.format != "name" && o.format != "columns" {
+		return recs, nil
+	}
+	out := make([]Rec, 0, len(recs))
+	for _, r := range recs {
+		if o.format == "name" {
+			if len(r) > 0 {
+				out = append(out, r[:1])
+			}
+			continue
+		}
+		var p Rec
+		for _, name := range o.columns {
+			kv, ok := r.get(name)
+			if !ok {
+				have := make([]string, len(r))
+				for i, kv := range r {
+					have[i] = kv.K
+				}
+				return nil, fail(ExitUsage, "unknown column %q (have: %s)", name, strings.Join(have, ", "))
+			}
+			p = append(p, kv)
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+// render formats records for -o/--output. single means one record that is
+// not part of a list (get, at, write results): json and yaml then print an
+// object rather than a list.
+func render(recs []Rec, o *opts, single bool) ([]byte, error) {
+	recs, err := project(recs, o)
+	if err != nil {
+		return nil, err
+	}
+	format, header := o.format, o.header
+	if format == "name" || format == "columns" {
+		header = header && format == "columns"
+		format = ""
+	}
+	if single && (format == "json" || format == "yaml") {
 		var b bytes.Buffer
 		for _, r := range recs {
-			if len(r) > 0 {
-				b.WriteString(Rec{r[0]}.tsv() + "\n")
+			if format == "json" {
+				b.WriteString(r.json() + "\n")
+			} else {
+				b.WriteString(r.yaml("", ""))
 			}
 		}
 		return b.Bytes(), nil
-	case "columns":
-		var out []Rec
-		for _, r := range recs {
-			var p Rec
-			for _, name := range o.columns {
-				found := false
-				for _, kv := range r {
-					if kv.K == name {
-						p = append(p, kv)
-						found = true
-						break
-					}
-				}
-				if !found {
-					var have []string
-					for _, kv := range r {
-						have = append(have, kv.K)
-					}
-					return nil, fail(ExitUsage, "unknown column %q (have: %s)", name, strings.Join(have, ", "))
-				}
-			}
-			out = append(out, p)
-		}
-		return renderRecs(out, "", o.header), nil
 	}
-	return renderRecs(recs, o.format, o.header), nil
-}
-
-// oneOut renders a single metadata record in any format (tsv gives one row).
-func oneOut(r Rec, o *opts) ([]byte, error) {
-	if o.format == "" {
-		return render([]Rec{r}, o)
-	}
-	return recOut(r, o)
-}
-
-// recOut renders one record (get, at, and -i results).
-func recOut(r Rec, o *opts) ([]byte, error) {
-	switch o.format {
-	case "yaml":
-		return []byte(r.yaml("", "")), nil
-	case "name", "columns":
-		return render([]Rec{r}, o)
-	}
-	return []byte(r.json() + "\n"), nil
+	return renderRecs(recs, format, header), nil
 }
 
 var plainYAML = regexp.MustCompile(`^[A-Za-z_/][A-Za-z0-9_./~{}%-]*$`)
@@ -160,11 +167,11 @@ func yamlStr(s string, ind int) string {
 	if plainYAML.MatchString(s) && !yamlReserved[strings.ToLower(s)] {
 		return s
 	}
-	if !strings.Contains(s, "\n") || strings.ContainsAny(s, "\r\x00\x1b\x7f") || !utf8.ValidString(s) {
+	if !strings.Contains(s, "\n") || !utf8.ValidString(s) {
 		return jsonStr(s)
 	}
 	for _, r := range s {
-		if r < 0x20 && r != '\n' && r != '\t' {
+		if r < 0x20 && r != '\n' && r != '\t' || r == 0x7f {
 			return jsonStr(s)
 		}
 	}
@@ -178,8 +185,8 @@ func yamlStr(s string, ind int) string {
 	if s[0] == ' ' || s[0] == '\n' { // leading space/blank line: explicit indentation indicator
 		hdr = "|2" + hdr[1:]
 	}
-	pad := strings.Repeat(" ", ind)
-	body := strings.TrimSuffix(s, "\n")
+	pad := sp(ind)
+	body := strings.TrimSuffix(s, "\n") // keep ("+") retains the blank lines
 	if hdr[len(hdr)-1] == '+' {
 		body = s[:len(s)-1]
 	}

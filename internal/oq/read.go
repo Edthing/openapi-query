@@ -2,12 +2,14 @@ package oq
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 )
 
 func finishList(recs []Rec, o *opts, hint string) (*result, error) {
-	data, err := render(recs, o)
+	data, err := render(recs, o, false)
 	if err != nil {
 		return nil, err
 	}
@@ -17,7 +19,7 @@ func finishList(recs []Rec, o *opts, hint string) (*result, error) {
 func nodeRec(w *WS, n *Node) Rec {
 	l1, l2 := n.lines()
 	return Rec{
-		{"address", w.Addr(n)}, {"kind", kindOf(n.Val)}, {"tokens", tokensOf(n.Text())},
+		{"address", w.Addr(n)}, {"kind", kindOf(n.Val)}, {"tokens", n.tokens()},
 		{"line", l1}, {"endLine", l2}, {"note", n.note()},
 	}
 }
@@ -38,10 +40,7 @@ func cmdOutline(c *cli, o *opts) (*result, error) {
 	if err != nil {
 		return nil, err
 	}
-	depth := 1
-	if o.depthSet {
-		depth = o.depth
-	}
+	depth := o.depth
 	var recs []Rec
 	var walk func(m *Node, d int)
 	walk = func(m *Node, d int) {
@@ -56,11 +55,12 @@ func cmdOutline(c *cli, o *opts) (*result, error) {
 	if len(recs) == 0 {
 		recs = append(recs, nodeRec(w, n))
 	}
-	hint := fmt.Sprintf("oq outline %s %s", shq(o.pos[0]), shq(addr))
-	if depth > 1 {
-		hint += fmt.Sprintf(" --depth %d, or outline a child address", depth-1)
-	} else {
-		hint = fmt.Sprintf("oq get %s <child address from a parent outline>", shq(o.pos[0]))
+	hint := ""
+	switch {
+	case depth > 1:
+		hint = fmt.Sprintf("oq outline %s %s --depth %d, or outline a child address", shq(o.pos[0]), shq(addr), depth-1)
+	case len(n.Kids) > 0:
+		hint = fmt.Sprintf("outline one child, e.g. oq outline %s %s, or filter with grep/awk (oq ls ops | grep ...)", shq(o.pos[0]), shq(w.Addr(n.Kids[0])))
 	}
 	return finishList(recs, o, hint)
 }
@@ -110,7 +110,7 @@ func cmdGet(c *cli, o *opts) (*result, error) {
 		{"startByte", n.ValStart}, {"endByte", n.ValEnd},
 		{"hash", hashOf(text)}, {"tokens", tokensOf(text)},
 	}
-	data, err := oneOut(rec, o)
+	data, err := render([]Rec{rec}, o, true)
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +175,7 @@ func cmdAt(c *cli, o *opts) (*result, error) {
 		cur = next
 	}
 	if o.format != "" {
-		data, err := recOut(nodeRec(w, cur), o)
+		data, err := render([]Rec{nodeRec(w, cur)}, o, true)
 		if err != nil {
 			return nil, err
 		}
@@ -198,13 +198,13 @@ func cmdLs(c *cli, o *opts) (*result, error) {
 		for _, op := range w.Ops() {
 			recs = append(recs, Rec{
 				{"address", w.Addr(op.Node)}, {"method", strings.ToUpper(op.Method)}, {"path", op.Path},
-				{"operationId", op.ID}, {"tokens", tokensOf(op.Node.Text())},
+				{"operationId", op.ID}, {"tokens", op.Node.tokens()},
 			})
 		}
 	case "schemas":
 		for _, b := range w.schemaBases() {
 			for _, k := range b.Kids {
-				recs = append(recs, Rec{{"address", w.Addr(k)}, {"name", k.Seg}, {"tokens", tokensOf(k.Text())}})
+				recs = append(recs, Rec{{"address", w.Addr(k)}, {"name", k.Seg}, {"tokens", k.tokens()}})
 			}
 		}
 	case "tags":
@@ -222,16 +222,16 @@ func cmdLs(c *cli, o *opts) (*result, error) {
 				if nm := k.Child("name"); nm != nil {
 					name = nm.Val.Value
 				}
-				recs = append(recs, Rec{{"address", w.Addr(k)}, {"name", name}, {"tokens", tokensOf(k.Text())}, {"ops", count[name]}})
+				recs = append(recs, Rec{{"address", w.Addr(k)}, {"name", name}, {"tokens", k.tokens()}, {"ops", count[name]}})
 			}
 		}
 	case "files":
 		docs := w.Closure()
 		for _, d := range docs[1:] {
-			recs = append(recs, Rec{{"path", d.Disp}, {"tokens", tokensOf(string(d.Src))}, {"status", "ok"}})
+			recs = append(recs, Rec{{"path", d.Disp}, {"tokens", tokensOfBytes(d.Src)}, {"status", "ok"}})
 		}
 		miss := w.MissingFiles()
-		for _, f := range sortedKeys(miss) {
+		for _, f := range slices.Sorted(maps.Keys(miss)) {
 			st := "missing"
 			if !strings.HasPrefix(miss[f].Error(), "file not found") {
 				st = "parse-error"
@@ -257,10 +257,7 @@ func cmdDeps(c *cli, o *opts) (*result, error) {
 	if err != nil {
 		return nil, err
 	}
-	depth := 1
-	if o.depthSet {
-		depth = o.depth
-	}
+	depth := o.depth
 	type dep struct {
 		t     RefTarget
 		depth int
@@ -300,7 +297,7 @@ func cmdDeps(c *cli, o *opts) (*result, error) {
 			continue
 		}
 		if !o.unresolved {
-			recs = append(recs, Rec{{"address", w.TargetAddr(d.t)}, {"tokens", tokensOf(d.t.Node.Text())}, {"depth", d.depth}, {"from", d.from}})
+			recs = append(recs, Rec{{"address", w.TargetAddr(d.t)}, {"tokens", d.t.Node.tokens()}, {"depth", d.depth}, {"from", d.from}})
 		}
 	}
 	if unresolved > 0 && !o.unresolved {
@@ -326,16 +323,14 @@ func cmdRefs(c *cli, o *opts) (*result, error) {
 	var recs []Rec
 	seen := map[*Node]bool{}
 	for _, d := range w.Closure() {
-		var sites []RefSite
-		refSites(d.Root, &sites)
-		for _, s := range sites {
+		for _, s := range d.allRefs() {
 			t := w.ParseRef(d, s.Raw)
 			if t.Doc != target.Doc || !hasPrefix(t.Segs, tsegs) || seen[s.Node] {
 				continue
 			}
 			seen[s.Node] = true
 			recs = append(recs, Rec{
-				{"address", w.Addr(s.Node)}, {"tokens", tokensOf(s.Node.Text())},
+				{"address", w.Addr(s.Node)}, {"tokens", s.Node.tokens()},
 				{"target", w.TargetAddr(t)}, {"in", w.enclosing(s.Node)},
 			})
 		}
@@ -343,17 +338,7 @@ func cmdRefs(c *cli, o *opts) (*result, error) {
 	return finishList(recs, o, "narrow the address, or filter with grep")
 }
 
-func hasPrefix(s, p []string) bool {
-	if len(p) > len(s) {
-		return false
-	}
-	for i := range p {
-		if s[i] != p[i] {
-			return false
-		}
-	}
-	return true
-}
+func hasPrefix(s, p []string) bool { return len(s) >= len(p) && slices.Equal(s[:len(p)], p) }
 
 // enclosing names the operation or component a node lives in, or "-".
 func (w *WS) enclosing(n *Node) string {
