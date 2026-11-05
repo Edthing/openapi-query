@@ -1,0 +1,93 @@
+openapi: 3.0.3
+info:
+  title: Pets # the title
+  version: "1.0"
+  description: |
+    Multi-line
+    # not a comment
+    text.
+tags:
+  - name: pets
+    description: Pet operations
+  - name: admin
+paths:
+  /pets:
+    get:
+      operationId: listPets
+      tags: [pets]
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Pet'
+    post:
+      operationId: createPet
+      tags:
+        - pets
+        - admin
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Pet"
+      responses:
+        "201":
+          description: created
+  /pets/{pet_id}:
+    get:
+      operationId: getPet
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pet'
+        default:
+          description: error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+components:
+  schemas:
+    # the pet
+    Pet: &pet
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: integer
+        name:
+          type: string # name of pet
+        owner:
+          $ref: '#/components/schemas/Owner'
+
+    # owners
+    Owner:
+      type: object
+      properties:
+        name: {type: string}
+        pets:
+          type: array
+          items:
+            $ref: '#/components/schemas/Pet'
+    Error:
+      type: object
+      properties:
+        message:
+          type: string
+    Missing:
+      $ref: '#/components/schemas/Nope'
+    PetAlias: *pet
+    "odd key/with space":
+      type: string

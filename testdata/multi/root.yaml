@@ -1,0 +1,29 @@
+openapi: 3.0.3
+info:
+  title: Multi
+  version: "1"
+paths:
+  /items/{item_id}:
+    get:
+      operationId: getItem
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: 'schemas/item.yaml#/Item'
+  /gone:
+    get:
+      operationId: gone
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: 'schemas/missing.yaml#/X'
+components:
+  schemas:
+    Local:
+      $ref: 'schemas/item.yaml#/Tag'

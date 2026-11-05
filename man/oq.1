@@ -1,0 +1,123 @@
+.TH OQ 1 "2026" "oq" "User Commands"
+.SH NAME
+oq \- address nodes in an OpenAPI document
+.SH SYNOPSIS
+.B oq
+.I command
+.I spec
+[\fIargs\fR]
+.SH DESCRIPTION
+.B oq
+resolves addresses in an OpenAPI (YAML or JSON) document and acts on the text at them: list what is there and how big it is, print it exactly, map a line back to a node, find references, or replace a node.
+.I spec
+is a file, or
+.B \-
+for standard input.
+Searching, linting, formatting and bundling are left to other tools.
+.PP
+Listings are one record per line, tab separated. Raw output is the node's source text. Success is silent, errors go to standard error.
+.SH ADDRESSES
+.TP
+.B /components/schemas/item
+JSON pointer (also
+.BR #/... ).
+.TP
+.B schemas/item.yaml#/Item
+Pointer into an external file, relative to the spec's directory.
+.TP
+.B GET /items/{item_id}
+Operation by method and path.
+.TP
+.B path:/items/{item_id}
+The whole path item, with all its methods.
+.TP
+.B opid:listItems
+Operation by operationId.
+.TP
+.B schema:item
+Named schema.
+.PP
+Addresses printed by
+.B oq
+are JSON pointers without spaces; special characters are percent-encoded.
+.SH COMMANDS
+.TP
+.B outline \fIspec\fR [\fIaddr\fR] [\-\-depth N]
+Child addresses with kind, approximate tokens, line range and anchor note.
+.TP
+.B ls \fIspec\fR ops|schemas|tags|files
+One entry per line with approximate tokens.
+.TP
+.B get \fIspec\fR \fIaddr\fR [\-\-metadata]
+Print the node's source text. \fB\-o json\fR converts the node to JSON; \fB\-o yaml\fR is the same as the default. With
+.BR \-\-metadata ,
+print address, kind, range, hash and token count instead, in the \fB\-o\fR format (a tab separated row by default).
+.TP
+.B at \fIspec\fR \fIline\fR[:\fIcol\fR]
+Address of the innermost node at that position.
+.TP
+.B deps \fIspec\fR \fIaddr\fR [\-\-depth N] [\-\-unresolved]
+Nodes referenced by
+.IR addr ,
+breadth first. Default depth 1.
+.TP
+.B refs \fIspec\fR \fIaddr\fR
+Nodes that reference
+.IR addr .
+.TP
+.B set \fIspec\fR \fIaddr\fR [\-\-expect H] [\-i] [\-\-file F]
+Replace the value at
+.I addr
+with the YAML or JSON read from standard input.
+.TP
+.B insert \fIspec\fR \fIaddr\fR [\-\-after KEY] [\-\-expect H] [\-i] [\-\-file F]
+Add the entries of the input mapping or sequence to the container at
+.IR addr .
+.TP
+.B rm \fIspec\fR \fIaddr\fR [\-\-expect H] [\-i]
+Remove the entry at
+.IR addr .
+.SH OPTIONS
+.TP
+.B \-o, \-\-output tsv|name|columns=a,b|json|yaml
+Output format (default tsv; there is no \-\-json flag). name prints only the first column; columns= selects columns by name. json and yaml repeat field names on every record and cost more tokens. For write commands only with \-i.
+.TP
+.B \-\-max\-tokens N
+Output cap in approximate tokens (default 5000, 0 disables). Over the cap nothing is printed, a narrower command is suggested and the exit status is 4.
+.TP
+.B \-\-header
+Print column names as the first line of a listing (outline, ls, deps, refs).
+.TP
+.B \-h, \-\-help
+Show help for the command.
+.TP
+.B \-i
+Edit the file in place, atomically, under a directory lock. The edit is re-applied, including the hash check, if the file changed meanwhile.
+.TP
+.B \-\-expect H
+Hash from
+.B get \-o columns=hash
+(at least 6 hex characters). Mismatch exits with 3.
+.SH EXIT STATUS
+.TP
+.B 0
+ok
+.TP
+.B 1
+address not found
+.TP
+.B 2
+usage or parse error
+.TP
+.B 3
+stale write
+.TP
+.B 4
+output over the size cap
+.SH EXAMPLES
+.nf
+grep \-n 'deprecated: true' openapi.yaml | cut \-d: \-f1 | xargs \-n1 oq at openapi.yaml
+oq deps openapi.yaml 'GET /items/{item_id}' \-o name | xargs \-I% oq get openapi.yaml %
+h=$(oq get openapi.yaml schema:item \-o columns=hash)
+oq set openapi.yaml schema:item \-\-expect "$h" \-i < item.yaml
+.fi

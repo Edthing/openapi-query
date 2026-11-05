@@ -1,0 +1,20 @@
+version: 2
+project_name: oq
+builds:
+  - id: oq
+    main: ./cmd/oq
+    binary: oq
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags: ["-s -w -X github.com/Edwinexd/openapi-query/internal/oq.versionOverride={{.Version}}"]
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files: [README.md, LICENSE, man/oq.1]
+checksum:
+  name_template: checksums.txt
+changelog:
+  sort: asc

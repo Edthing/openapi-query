@@ -1,0 +1,9 @@
+Item:
+  type: object
+  properties:
+    id:
+      type: string
+    tag:
+      $ref: '#/Tag'
+Tag:
+  type: string
