@@ -21,7 +21,8 @@ internal/oq/write.go     set, insert, rm: splicing and verification
 internal/oq/flow.go      converting new content to JSON for JSON/flow contexts
 internal/oq/writecmd.go  write command plumbing, --expect, atomic -i
 internal/oq/cli.go       flag parsing, dispatch, size cap, exit codes
-internal/oq/help.go      help text
+internal/oq/help.go      help text, flag table (flagDefs) shared by parsing, help and completion
+internal/oq/complete.go  shell completion: cobra command tree generated from commands and flagDefs
 testdata/                small fixtures: comments, anchors, block scalars, minified JSON, multi-file refs
 ```
 
@@ -67,7 +68,8 @@ Node ranges are exact, not line-based: `Node.ValStart`/`ValEnd` are byte offsets
 
 ## Conventions
 
-- Go, standard library plus `go.yaml.in/yaml/v3` only.
+- Go, standard library plus `go.yaml.in/yaml/v3`. `spf13/cobra` is used for shell completion only (`complete.go`); argument parsing and dispatch stay in `cli.go`. Prefer an established library over hand-rolling shell or protocol code.
+- New commands and flags go in `commands` (`cli.go`) and `flagDefs` (`help.go`); help and completion are generated from them.
 - Keep the diff small and add a test in `internal/oq/cli_test.go` for any behaviour change. Add a fixture to `testdata/` for any new YAML shape.
 - Commit messages are a single line.
 - When behaviour or flags change, update `README.md`, `man/oq.1` and the help text in `internal/oq/help.go` together.

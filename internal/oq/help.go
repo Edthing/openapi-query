@@ -1,6 +1,9 @@
 package oq
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 const helpText = `oq - address nodes in an OpenAPI document
 
@@ -32,6 +35,7 @@ addresses:
 global: -o tsv|name|columns=a,b|json|yaml (default tsv, the cheapest), --max-tokens N (default 5000, 0 disables),
         --header (listings)
         oq <command> --help for the flags of one command
+shell:  oq completion bash|zsh|fish|powershell   completion script (oq completion <shell> --help)
 exit:   0 ok, 1 not found, 2 usage/parse error, 3 stale write, 4 over size cap
 `
 
@@ -47,28 +51,54 @@ var cmdDesc = map[string]string{
 	"rm":      "Remove the entry at an address, including its key.",
 }
 
-var flagDesc = map[string]string{
-	"--depth":      "--depth N         how many levels to descend (default 1)",
-	"--header":     "--header          print column names as the first line",
-	"--metadata":   "--metadata        print the node's metadata (address, kind, range, hash, tokens) instead of its text,\n                    in the -o format (tsv row by default). -o columns=hash implies it",
-	"--unresolved": "--unresolved      list only refs that do not resolve (adds a reason column)",
-	"--expect":     "--expect H        fail with exit 3 unless the node's hash (from get --metadata -o columns=hash) starts with H",
-	"-i":           "-i, --in-place    edit the file atomically instead of writing to stdout",
-	"--after":      "--after KEY       insert after this key (mapping) or index (sequence)",
-	"--file":       "-f, --file F      read the new content from F instead of stdin",
+// flagDef describes one flag. Help, parsing and shell completion all read
+// flagDefs, keyed by the name used in cmdSpec.flags.
+type flagDef struct {
+	long, short string // without dashes
+	arg         string // value placeholder, "" for boolean flags
+	desc        string
+}
+
+var flagDefs = map[string]flagDef{
+	"--depth":      {"depth", "", "N", "how many levels to descend (default 1)"},
+	"--header":     {"header", "", "", "print column names as the first line"},
+	"--metadata":   {"metadata", "", "", "print the node's metadata (address, kind, range, hash, tokens) instead of its text,\n                    in the -o format (tsv row by default). -o columns=hash implies it"},
+	"--unresolved": {"unresolved", "", "", "list only refs that do not resolve (adds a reason column)"},
+	"--expect":     {"expect", "", "H", "fail with exit 3 unless the node's hash (from get --metadata -o columns=hash) starts with H"},
+	"-i":           {"in-place", "i", "", "edit the file atomically instead of writing to stdout"},
+	"--after":      {"after", "", "KEY", "insert after this key (mapping) or index (sequence)"},
+	"--file":       {"file", "f", "F", "read the new content from F instead of stdin"},
+	"-o":           {"output", "o", "F", "tsv (default), name (first column only, e.g. addresses),\n                    columns=a,b (named columns), json or yaml. json/yaml repeat field\n                    names on every record (~70% more tokens on listings): prefer the default"},
+	"--max-tokens": {"max-tokens", "", "N", "output cap in approximate tokens (default 5000, 0 disables)"},
+	"-h":           {"help", "h", "", "this help"},
+}
+
+// cmdFlags lists the flags a command accepts, as flagDefs keys, in help order.
+func cmdFlags(sp cmdSpec) []string {
+	fs := append(strings.Fields(sp.flags), "-o")
+	if sp.read {
+		fs = append(fs, "--max-tokens")
+	}
+	return append(fs, "-h")
+}
+
+func (f flagDef) String() string {
+	name := "--" + f.long
+	if f.short != "" {
+		name = "-" + f.short + ", " + name
+	}
+	if f.arg != "" {
+		name += " " + f.arg
+	}
+	return fmt.Sprintf("%-18s%s", name, f.desc)
 }
 
 func cmdHelp(name string, sp cmdSpec) string {
 	var b strings.Builder
 	b.WriteString("usage: " + sp.usage + "\n\n" + cmdDesc[name] + "\n\nflags:\n")
-	for _, f := range strings.Fields(sp.flags) {
-		b.WriteString("  " + flagDesc[f] + "\n")
+	for _, f := range cmdFlags(sp) {
+		b.WriteString("  " + flagDefs[f].String() + "\n")
 	}
-	b.WriteString("  -o, --output F    tsv (default), name (first column only, e.g. addresses),\n                    columns=a,b (named columns), json or yaml. json/yaml repeat field\n                    names on every record (~70% more tokens on listings): prefer the default\n")
-	if sp.read {
-		b.WriteString("  --max-tokens N    output cap in approximate tokens (default 5000, 0 disables)\n")
-	}
-	b.WriteString("  -h, --help        this help\n")
 	if sp.read {
 		b.WriteString("\nWith stdin piped, <spec> may be omitted.\n")
 	}

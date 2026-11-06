@@ -104,6 +104,9 @@ func (c *cli) run(args []string) (int, error) {
 		fmt.Fprint(c.err, helpText)
 		return ExitUsage, nil
 	}
+	if isCompletionCmd(args[0]) {
+		return c.runCompletion(args)
+	}
 	switch args[0] {
 	case "-h", "--help":
 		fmt.Fprint(c.out, helpText)
@@ -162,12 +165,14 @@ func (c *cli) run(args []string) (int, error) {
 
 func parseOpts(args []string, spec cmdSpec) (*opts, error) {
 	o := &opts{maxTokens: defaultCap, depth: 1}
-	allowed := map[string]bool{"-o": true, "--output": true, "--max-tokens": true, "-h": true, "--help": true}
-	for _, f := range strings.Fields(spec.flags) {
-		allowed[f] = true
+	allowed := map[string]bool{"--max-tokens": true} // accepted everywhere, documented for read commands
+	for _, k := range cmdFlags(spec) {
+		f := flagDefs[k]
+		allowed["--"+f.long] = true
+		if f.short != "" {
+			allowed["-"+f.short] = true
+		}
 	}
-	allowed["--in-place"] = allowed["-i"]
-	allowed["-f"] = allowed["--file"]
 	endFlags := false
 	for i := 0; i < len(args); i++ {
 		a := args[i]

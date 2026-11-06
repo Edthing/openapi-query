@@ -77,6 +77,12 @@ Add the entries of the input mapping or sequence to the container at
 .B rm \fIspec\fR \fIaddr\fR [\-\-expect H] [\-i]
 Remove the entry at
 .IR addr .
+.TP
+.B completion bash|zsh|fish|powershell
+Print a shell completion script. It completes commands, flags, output columns and addresses read from the spec on the command line.
+.B make install
+installs the scripts under
+.IR PREFIX /share.
 .SH OPTIONS
 .TP
 .B \-o, \-\-output tsv|name|columns=a,b|json|yaml

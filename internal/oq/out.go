@@ -26,6 +26,8 @@ type Rec []KV
 // Tok is an approximate token count (characters / 4).
 type Tok int
 
+func (t Tok) String() string { return "~" + strconv.Itoa(int(t)) }
+
 func tokensOf(s string) Tok { return Tok((utf8.RuneCountInString(s) + 3) / 4) }
 
 func tokensOfBytes(b []byte) Tok { return Tok((utf8.RuneCount(b) + 3) / 4) }
@@ -204,7 +206,7 @@ func (r Rec) tsv() string {
 	for i, kv := range r {
 		switch v := kv.V.(type) {
 		case Tok:
-			cols[i] = "~" + strconv.Itoa(int(v))
+			cols[i] = v.String()
 		case string:
 			cols[i] = strings.NewReplacer("\t", " ", "\n", " ", "\r", "").Replace(v)
 		default:

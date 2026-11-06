@@ -451,3 +451,53 @@ func writeTemp(t *testing.T, content string) string {
 	}
 	return f
 }
+
+// Shell completion goes through cobra's hidden __complete command: candidate
+// lines (value, tab, description), then ":directive".
+func TestCompletion(t *testing.T) {
+	pet, multi := td("petstore.yaml"), td("multi/root.yaml")
+	cases := []struct {
+		args []string
+		want []string // candidate values, in order
+		dir  string   // directive line
+	}{
+		{[]string{"g"}, []string{"get"}, ":4"},
+		{[]string{"get", ""}, []string{"yaml", "yml", "json"}, ":8"},
+		{[]string{"ls", pet, ""}, []string{"ops", "schemas", "tags", "files"}, ":4"},
+		{[]string{"get", pet, "/pa"}, []string{"/paths"}, ":6"},
+		{[]string{"get", pet, "/paths"}, []string{"/paths/~1pets", "/paths/~1pets~1{pet_id}"}, ":6"},
+		{[]string{"get", pet, "/paths/~1pets/g"}, []string{"/paths/~1pets/get"}, ":6"},
+		{[]string{"get", pet, "#/inf"}, []string{"#/info"}, ":6"},
+		{[]string{"get", pet, "/info/t"}, []string{"/info/title"}, ":4"},
+		{[]string{"get", pet, "opid:g"}, []string{"opid:getPet"}, ":4"},
+		{[]string{"get", pet, "path:"}, []string{"path:/pets", "path:/pets/{pet_id}"}, ":4"},
+		{[]string{"get", pet, "schema:o"}, []string{"schema:odd key/with space"}, ":4"},
+		{[]string{"get", pet, "GET /pets/"}, []string{"GET /pets/{pet_id}"}, ":4"},
+		{[]string{"get", pet, "sch"}, []string{"schema:"}, ":6"},
+		{[]string{"get", multi, "sch"}, []string{"schema:", "schemas/item.yaml#"}, ":6"},
+		{[]string{"get", multi, "schemas/item.yaml#/T"}, []string{"schemas/item.yaml#/Tag"}, ":6"},
+		{[]string{"at", pet, ""}, nil, ":4"},
+		{[]string{"get", pet, "/info", "--meta"}, []string{"--metadata"}, ":4"},
+		{[]string{"ls", pet, "ops", "-o", "columns=address,"}, []string{"columns=address,method", "columns=address,path", "columns=address,operationId", "columns=address,tokens"}, ":6"},
+		{[]string{"insert", pet, "/paths/~1pets", "--after", ""}, []string{"get", "post"}, ":4"},
+		{[]string{"rm", pet, "/info", "--expect", ""}, []string{"6f075635b684"}, ":4"},
+		{[]string{"set", pet, "/info", "--file", ""}, nil, ":0"},
+	}
+	for _, c := range cases {
+		out, _, code := run(t, "", append([]string{"__complete"}, c.args...)...)
+		lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+		var got []string
+		for _, l := range lines[:len(lines)-1] {
+			v, _, _ := strings.Cut(l, "\t")
+			got = append(got, v)
+		}
+		if code != 0 || strings.Join(got, "|") != strings.Join(c.want, "|") || lines[len(lines)-1] != c.dir {
+			t.Errorf("%q: code %d got %q %s, want %q %s", c.args, code, got, lines[len(lines)-1], c.want, c.dir)
+		}
+	}
+	for _, sh := range []string{"bash", "zsh", "fish", "powershell"} {
+		if out, _, code := run(t, "", "completion", sh); code != 0 || !strings.Contains(out, "__complete") {
+			t.Errorf("completion %s: %d", sh, code)
+		}
+	}
+}
