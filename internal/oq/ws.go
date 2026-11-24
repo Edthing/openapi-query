@@ -13,7 +13,6 @@ const (
 	ExitNotFound = 1
 	ExitUsage    = 2
 	ExitStale    = 3
-	ExitCap      = 4
 )
 
 type ExitError struct {

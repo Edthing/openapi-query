@@ -31,8 +31,8 @@ func TestReadCommands(t *testing.T) {
 		code  int
 	}{
 		{"outline root", []string{"outline", pet}, "/paths\tobject\t", "", 0},
-		{"ls ops", []string{"ls", pet, "ops"}, "/paths/~1pets~1{pet_id}/get\tGET\t/pets/{pet_id}\tgetPet\t", "", 0},
-		{"ls schemas", []string{"ls", pet, "schemas"}, "/components/schemas/odd%20key~1with%20space\todd key/with space\t", "", 0},
+		{"ls ops", []string{"ls", pet, "ops"}, "/paths/~1pets~1{pet_id}/get\tGET\t/pets/{pet_id}\tgetPet\n", "", 0},
+		{"ls schemas", []string{"ls", pet, "schemas"}, "/components/schemas/odd%20key~1with%20space\todd key/with space\n", "", 0},
 		{"ls tags", []string{"ls", pet, "tags"}, "/tags/0\tpets\t", "", 0},
 		{"get scalar", []string{"get", pet, "/info/title"}, "", "Pets\n", 0},
 		{"outline path item", []string{"outline", pet, "path:/pets"}, "/paths/~1pets/post\tobject\t", "", 0},
@@ -46,7 +46,7 @@ func TestReadCommands(t *testing.T) {
 		{"at key line", []string{"at", pet, "64"}, "", "/components/schemas/Pet\n", 0},
 		{"at line:col", []string{"at", pet, "69:9"}, "", "/components/schemas/Pet/properties/id\n", 0},
 		{"deps", []string{"deps", pet, "opid:getPet", "--depth", "2"}, "/components/schemas/Owner\t", "", 0},
-		{"deps unresolved", []string{"deps", pet, "/", "--unresolved"}, "/components/schemas/Nope\t-\t1\t/components/schemas/Missing\tpointer not found\n", "", 0},
+		{"deps unresolved", []string{"deps", pet, "/", "--unresolved"}, "/components/schemas/Nope\t1\t/components/schemas/Missing\tpointer not found\n", "", 0},
 		{"refs", []string{"refs", pet, "schema:Error"}, "\t/components/schemas/Error\t/paths/~1pets~1{pet_id}/get\n", "", 0},
 		{"missing address", []string{"get", pet, "/nope"}, "", "", ExitNotFound},
 		{"missing opid", []string{"get", pet, "opid:zzz"}, "", "", ExitNotFound},
@@ -54,12 +54,12 @@ func TestReadCommands(t *testing.T) {
 		{"bad usage", []string{"get", pet}, "", "", ExitUsage},
 		{"unknown flag", []string{"get", pet, "/info", "--bogus"}, "", "", ExitUsage},
 		{"missing file", []string{"get", "nope.yaml", "/"}, "", "", ExitUsage},
-		{"cap", []string{"get", pet, "/paths", "--max-tokens", "10"}, "", "", ExitCap},
-		{"cap off", []string{"get", pet, "/paths", "--max-tokens", "0"}, "operationId: listPets", "", 0},
+		{"no cap", []string{"get", pet, "/paths"}, "operationId: listPets", "", 0},
+		{"max-tokens gone", []string{"get", pet, "/paths", "--max-tokens", "10"}, "", "", ExitUsage},
 		{"json mini", []string{"ls", td("mini.json"), "ops", "-o", "json"}, `"operationId":"getA"`, "", 0},
 		{"multi ext get", []string{"get", td("multi/root.yaml"), "schemas/item.yaml#/Tag"}, "", "type: string\n", 0},
 		{"multi deps", []string{"deps", td("multi/root.yaml"), "opid:getItem"}, "schemas/item.yaml#/Item\t", "", 0},
-		{"multi files", []string{"ls", td("multi/root.yaml"), "files"}, "schemas/missing.yaml\t-\tmissing", "", 0},
+		{"multi files", []string{"ls", td("multi/root.yaml"), "files"}, "schemas/missing.yaml\tmissing", "", 0},
 	}
 	for _, c := range cases {
 		out, errs, code := run(t, "", c.args...)
@@ -82,11 +82,11 @@ func TestReadCommands(t *testing.T) {
 // Every address printed by outline must be accepted by get.
 func TestAddressRoundTrip(t *testing.T) {
 	for _, f := range []string{td("petstore.yaml"), td("mini.json"), td("multi/root.yaml")} {
-		out, _, _ := run(t, "", "outline", f, "/", "--depth", "9", "--max-tokens", "0")
+		out, _, _ := run(t, "", "outline", f, "/", "--depth", "9")
 		n := 0
 		for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
 			addr := strings.Split(l, "\t")[0]
-			if _, errs, code := run(t, "", "get", f, addr, "--max-tokens", "0"); code != 0 {
+			if _, errs, code := run(t, "", "get", f, addr); code != 0 {
 				t.Errorf("%s: get %q failed: %s", f, addr, errs)
 			}
 			n++
@@ -127,7 +127,7 @@ func TestWrites(t *testing.T) {
 	}
 	t.Run("set unchanged is identical", func(t *testing.T) {
 		for _, addr := range []string{"/info", "/info/description", "schema:Pet", "/paths/~1pets/get/tags", "/tags/1"} {
-			txt, _, _ := run(t, "", "get", pet, addr, "--max-tokens", "0")
+			txt, _, _ := run(t, "", "get", pet, addr)
 			out, errs, code := run(t, txt, "set", pet, addr)
 			if code != 0 || out != string(orig) {
 				t.Errorf("%s: code %d err %q identical=%v", addr, code, errs, out == string(orig))
@@ -264,11 +264,11 @@ func TestHelpAndHeader(t *testing.T) {
 		}
 	}
 	out, _, code := run(t, "", "outline", pet, "--header")
-	if code != 0 || !strings.HasPrefix(out, "address\tkind\ttokens\tline\tendLine\tnote\n/openapi\t") {
+	if code != 0 || !strings.HasPrefix(out, "address\tkind\tline\tendLine\tnote\n/openapi\t") {
 		t.Errorf("header: %d %q", code, out)
 	}
 	out, _, _ = run(t, "", "ls", pet, "ops", "--header")
-	if !strings.HasPrefix(out, "address\tmethod\tpath\toperationId\ttokens\n") {
+	if !strings.HasPrefix(out, "address\tmethod\tpath\toperationId\n") {
 		t.Errorf("ls header: %q", out)
 	}
 	if _, _, code := run(t, "", "get", pet, "/info", "--header"); code != ExitUsage {
@@ -306,13 +306,13 @@ func TestFormatsRoundTrip(t *testing.T) {
 		{"ls", td("multi/root.yaml"), "files"},
 	}
 	for _, c := range cmds {
-		tsv, _, code := run(t, "", append(c, "--max-tokens", "0")...)
+		tsv, _, code := run(t, "", c...)
 		if code != 0 {
 			t.Fatalf("%v: %d", c, code)
 		}
 		rows := strings.Count(tsv, "\n")
 		for _, f := range []string{"json", "yaml"} {
-			out, errs, code := run(t, "", append(c, "-o", f, "--max-tokens", "0")...)
+			out, errs, code := run(t, "", append(c, "-o", f)...)
 			if code != 0 {
 				t.Fatalf("%v -o %s: %d %s", c, f, code, errs)
 			}
@@ -334,7 +334,7 @@ func TestFormatsRoundTrip(t *testing.T) {
 func TestGetFormats(t *testing.T) {
 	pet := td("petstore.yaml")
 	for _, addr := range []string{"/info", "/info/description", "schema:Pet", "GET /pets/{pet_id}", "/info/title", "/paths/~1pets/get/tags"} {
-		raw, _, _ := run(t, "", "get", pet, addr, "--max-tokens", "0")
+		raw, _, _ := run(t, "", "get", pet, addr)
 		if y, _, _ := run(t, "", "get", pet, addr, "-o", "yaml"); y != raw {
 			t.Errorf("%s: -o yaml should equal the raw text\ngot %q\nwant %q", addr, y, raw)
 		}
@@ -360,11 +360,11 @@ func TestGetFormats(t *testing.T) {
 	}
 	// metadata
 	row, _, code := run(t, "", "get", pet, "/info/title", "--metadata")
-	if code != 0 || strings.Count(row, "\t") != 10 || strings.Count(row, "\n") != 1 || !strings.HasPrefix(row, "/info/title\tstring\t") {
+	if code != 0 || strings.Count(row, "\t") != 9 || strings.Count(row, "\n") != 1 || !strings.HasPrefix(row, "/info/title\tstring\t") {
 		t.Errorf("metadata row: %d %q", code, row)
 	}
 	hdr, _, _ := run(t, "", "get", pet, "/info/title", "--metadata", "--header")
-	if !strings.HasPrefix(hdr, "address\tkind\tfile\tline\tcol\tendLine\tendCol\tstartByte\tendByte\thash\ttokens\n") {
+	if !strings.HasPrefix(hdr, "address\tkind\tfile\tline\tcol\tendLine\tendCol\tstartByte\tendByte\thash\n") {
 		t.Errorf("metadata header: %q", hdr)
 	}
 	for _, f := range []string{"json", "yaml"} {
@@ -478,7 +478,7 @@ func TestCompletion(t *testing.T) {
 		{[]string{"get", multi, "schemas/item.yaml#/T"}, []string{"schemas/item.yaml#/Tag"}, ":6"},
 		{[]string{"at", pet, ""}, nil, ":4"},
 		{[]string{"get", pet, "/info", "--meta"}, []string{"--metadata"}, ":4"},
-		{[]string{"ls", pet, "ops", "-o", "columns=address,"}, []string{"columns=address,method", "columns=address,path", "columns=address,operationId", "columns=address,tokens"}, ":6"},
+		{[]string{"ls", pet, "ops", "-o", "columns=address,"}, []string{"columns=address,method", "columns=address,path", "columns=address,operationId"}, ":6"},
 		{[]string{"insert", pet, "/paths/~1pets", "--after", ""}, []string{"get", "post"}, ":4"},
 		{[]string{"rm", pet, "/info", "--expect", ""}, []string{"6f075635b684"}, ":4"},
 		{[]string{"set", pet, "/info", "--file", ""}, nil, ":0"},

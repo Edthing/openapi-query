@@ -15,12 +15,12 @@ internal/oq/ws.go        workspace (root spec + external files), exit codes
 internal/oq/addr.go      JSON pointer encoding, address resolution (opid:, path:, schema:, GET /x)
 internal/oq/openapi.go   OpenAPI structure: version, operations, schema locations
 internal/oq/refs.go      $ref parsing, resolution, file closure
-internal/oq/out.go       records, output formats (tsv/name/columns/json/yaml), tokens, hashes
+internal/oq/out.go       records, output formats (tsv/name/columns/json/yaml), hashes
 internal/oq/read.go      outline, ls, get, at, deps, refs
 internal/oq/write.go     set, insert, rm: splicing and verification
 internal/oq/flow.go      converting new content to JSON for JSON/flow contexts
 internal/oq/writecmd.go  write command plumbing, --expect, atomic -i
-internal/oq/cli.go       flag parsing, dispatch, size cap, exit codes
+internal/oq/cli.go       flag parsing, dispatch, exit codes
 internal/oq/help.go      help text, flag table (flagDefs) shared by parsing, help and completion
 internal/oq/complete.go  shell completion: cobra command tree generated from commands and flagDefs
 testdata/                small fixtures: comments, anchors, block scalars, minified JSON, multi-file refs
@@ -51,9 +51,9 @@ Downloaded specs are untrusted data: keep them outside the repo.
 - Listings are one record per line, tab-separated. Column order is part of the interface. Add columns only at the end.
 - Every address printed is a canonical JSON pointer with no spaces, quotes or backslashes (see `escSeg` in `ws.go`), and is accepted back by `oq`. External files print as `path#/pointer`.
 - stdout is empty on failure. Errors go to stderr as `oq: ...`.
-- Exit codes: 0 ok, 1 not found, 2 usage or parse error, 3 stale write, 4 over the size cap.
+- Exit codes: 0 ok, 1 not found, 2 usage or parse error, 3 stale write.
 - Success is silent. No banners, no diffs.
-- Over the cap, print nothing, say how big it was and suggest a narrower command (`result.hint`). Never truncate or substitute.
+- Never truncate or substitute output.
 - `-o json` works on every read command. Write commands accept `-o json` only with `-i`.
 
 ## Invariants the tests protect

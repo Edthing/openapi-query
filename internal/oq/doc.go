@@ -197,9 +197,6 @@ func (n *Node) ScalarChild(seg string) (string, bool) {
 	return "", false
 }
 
-// tokens is the approximate token count of the node's text, without copying it.
-func (n *Node) tokens() Tok { return tokensOfBytes(n.Doc.Src[n.ValStart:n.ValEnd]) }
-
 // expand creates children and computes ends. bound is the exclusive limit
 // (next sibling's start or the parent's limit).
 func (d *Doc) expand(n *Node, bound int) {

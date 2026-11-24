@@ -21,15 +21,12 @@ func version() string {
 	return baseVersion
 }
 
-const defaultCap = 5000
-
 type opts struct {
 	pos        []string
 	format     string // "" (tsv), "json", "yaml", "name" or "columns"
 	columns    []string
 	tsv        bool // -o tsv given explicitly
 	metadata   bool
-	maxTokens  int
 	depth      int // --depth, default 1
 	expect     string
 	inPlace    bool
@@ -43,7 +40,6 @@ type opts struct {
 
 type result struct {
 	data []byte
-	hint string // narrower command shown when the cap is hit
 }
 
 type cmdFn func(c *cli, o *opts) (*result, error)
@@ -51,7 +47,7 @@ type cmdFn func(c *cli, o *opts) (*result, error)
 type cmdSpec struct {
 	fn    cmdFn
 	flags string // command-specific flags, space separated
-	read  bool   // read commands honour the size cap and may take the spec from stdin
+	read  bool   // read commands may take the spec from stdin
 	usage string
 	min   int // positional arguments including the spec (read commands)
 	max   int
@@ -149,23 +145,13 @@ func (c *cli) run(args []string) (int, error) {
 	if res == nil {
 		return 0, nil
 	}
-	if spec.read && o.maxTokens > 0 {
-		if t := int(tokensOf(string(res.data))); t > o.maxTokens {
-			msg := fmt.Sprintf("output is ~%d tokens, over the %d token cap; nothing printed", t, o.maxTokens)
-			if res.hint != "" {
-				msg += "\nnarrower: " + res.hint
-			}
-			msg += "\nor raise the cap with --max-tokens N (0 disables it)"
-			return ExitCap, fmt.Errorf("%s", msg)
-		}
-	}
 	c.out.Write(res.data)
 	return 0, nil
 }
 
 func parseOpts(args []string, spec cmdSpec) (*opts, error) {
-	o := &opts{maxTokens: defaultCap, depth: 1}
-	allowed := map[string]bool{"--max-tokens": true} // accepted everywhere, documented for read commands
+	o := &opts{depth: 1}
+	allowed := map[string]bool{}
 	for _, k := range cmdFlags(spec) {
 		f := flagDefs[k]
 		allowed["--"+f.long] = true
@@ -224,10 +210,6 @@ func parseOpts(args []string, spec cmdSpec) (*opts, error) {
 			o.inPlace = true
 		case "--unresolved":
 			o.unresolved = true
-		case "--max-tokens":
-			if v, err = value(); err == nil {
-				o.maxTokens, err = atoiMin(v, 0)
-			}
 		case "--depth":
 			if v, err = value(); err == nil {
 				o.depth, err = atoiMin(v, 1)
@@ -308,16 +290,6 @@ func need(o *opts, min, max int, usage string) error {
 		return fail(ExitUsage, "wrong number of arguments\nusage: %s", usage)
 	}
 	return nil
-}
-
-func shq(s string) string {
-	if s != "" && strings.IndexFunc(s, func(r rune) bool {
-		return !(r == '/' || r == '.' || r == '_' || r == '-' || r == '#' || r == ':' || r == '~' || r == '%' || r == '=' ||
-			r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z')
-	}) < 0 {
-		return s
-	}
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }

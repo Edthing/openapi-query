@@ -112,7 +112,7 @@ func completeFlag(name, long string, args []string, cur string) ([]string, cobra
 		if col, ok := strings.CutPrefix(cur, "columns="); ok {
 			return completeColumns(name, args, col)
 		}
-		return []string{"tsv\tdefault, cheapest", "name\tfirst column only", "columns=\tnamed columns, e.g. columns=address,tokens", "json", "yaml"}, cobra.ShellCompDirectiveNoSpace | noFiles
+		return []string{"tsv\tdefault, cheapest", "name\tfirst column only", "columns=\tnamed columns, e.g. columns=address,kind", "json", "yaml"}, cobra.ShellCompDirectiveNoSpace | noFiles
 	case "expect", "after":
 		if len(args) < 2 {
 			return nil, noFiles
@@ -237,13 +237,13 @@ func (w *WS) completeAddr(cur string) ([]string, cobra.ShellCompDirective) {
 	case strings.HasPrefix(cur, "path:"):
 		if paths := w.Root.Root.Child("paths"); paths != nil {
 			for _, k := range paths.Kids {
-				add("path:"+k.Seg, k.tokens().String(), false)
+				add("path:"+k.Seg, kindOf(k.Val), false)
 			}
 		}
 	case strings.HasPrefix(cur, "schema:"):
 		for _, b := range w.schemaBases() {
 			for _, k := range b.Kids {
-				add("schema:"+k.Seg, k.tokens().String(), false)
+				add("schema:"+k.Seg, kindOf(k.Val), false)
 			}
 		}
 	case strings.HasPrefix(cur, "/") || strings.HasPrefix(cur, "#"):
@@ -323,7 +323,7 @@ func (w *WS) completePtr(d *Doc, prefix, cur string, out *[]string) bool {
 			if !strings.HasPrefix(cand, cur) || cand == cur && len(k.Kids) > 0 {
 				continue
 			}
-			*out = append(*out, cand+"\t"+kindOf(k.Val)+" "+k.tokens().String())
+			*out = append(*out, cand+"\t"+kindOf(k.Val))
 			more = more || len(k.Kids) > 0
 		}
 	}

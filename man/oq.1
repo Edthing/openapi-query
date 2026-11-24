@@ -43,15 +43,15 @@ are JSON pointers without spaces; special characters are percent-encoded.
 .SH COMMANDS
 .TP
 .B outline \fIspec\fR [\fIaddr\fR] [\-\-depth N]
-Child addresses with kind, approximate tokens, line range and anchor note.
+Child addresses with kind, line range and anchor note.
 .TP
 .B ls \fIspec\fR ops|schemas|tags|files
-One entry per line with approximate tokens.
+One entry per line.
 .TP
 .B get \fIspec\fR \fIaddr\fR [\-\-metadata]
 Print the node's source text. \fB\-o json\fR converts the node to JSON; \fB\-o yaml\fR is the same as the default. With
 .BR \-\-metadata ,
-print address, kind, range, hash and token count instead, in the \fB\-o\fR format (a tab separated row by default).
+print address, kind, range and hash instead, in the \fB\-o\fR format (a tab separated row by default).
 .TP
 .B at \fIspec\fR \fIline\fR[:\fIcol\fR]
 Address of the innermost node at that position.
@@ -86,10 +86,7 @@ installs the scripts under
 .SH OPTIONS
 .TP
 .B \-o, \-\-output tsv|name|columns=a,b|json|yaml
-Output format (default tsv; there is no \-\-json flag). name prints only the first column; columns= selects columns by name. json and yaml repeat field names on every record and cost more tokens. For write commands only with \-i.
-.TP
-.B \-\-max\-tokens N
-Output cap in approximate tokens (default 5000, 0 disables). Over the cap nothing is printed, a narrower command is suggested and the exit status is 4.
+Output format (default tsv; there is no \-\-json flag). name prints only the first column; columns= selects columns by name. json and yaml repeat field names on every record. For write commands only with \-i.
 .TP
 .B \-\-header
 Print column names as the first line of a listing (outline, ls, deps, refs).
@@ -117,9 +114,6 @@ usage or parse error
 .TP
 .B 3
 stale write
-.TP
-.B 4
-output over the size cap
 .SH EXAMPLES
 .nf
 grep \-n 'deprecated: true' openapi.yaml | cut \-d: \-f1 | xargs \-n1 oq at openapi.yaml

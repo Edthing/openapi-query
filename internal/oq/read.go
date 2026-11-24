@@ -8,18 +8,18 @@ import (
 	"strings"
 )
 
-func finishList(recs []Rec, o *opts, hint string) (*result, error) {
+func finishList(recs []Rec, o *opts) (*result, error) {
 	data, err := render(recs, o, false)
 	if err != nil {
 		return nil, err
 	}
-	return &result{data, hint}, nil
+	return &result{data}, nil
 }
 
 func nodeRec(w *WS, n *Node) Rec {
 	l1, l2 := n.lines()
 	return Rec{
-		{"address", w.Addr(n)}, {"kind", kindOf(n.Val)}, {"tokens", n.tokens()},
+		{"address", w.Addr(n)}, {"kind", kindOf(n.Val)},
 		{"line", l1}, {"endLine", l2}, {"note", n.note()},
 	}
 }
@@ -55,14 +55,7 @@ func cmdOutline(c *cli, o *opts) (*result, error) {
 	if len(recs) == 0 {
 		recs = append(recs, nodeRec(w, n))
 	}
-	hint := ""
-	switch {
-	case depth > 1:
-		hint = fmt.Sprintf("oq outline %s %s --depth %d, or outline a child address", shq(o.pos[0]), shq(addr), depth-1)
-	case len(n.Kids) > 0:
-		hint = fmt.Sprintf("outline one child, e.g. oq outline %s %s, or filter with grep/awk (oq ls ops | grep ...)", shq(o.pos[0]), shq(w.Addr(n.Kids[0])))
-	}
-	return finishList(recs, o, hint)
+	return finishList(recs, o)
 }
 
 func cmdGet(c *cli, o *opts) (*result, error) {
@@ -78,10 +71,6 @@ func cmdGet(c *cli, o *opts) (*result, error) {
 		return nil, err
 	}
 	text := n.DisplayText()
-	hint := ""
-	if len(n.Kids) > 0 {
-		hint = fmt.Sprintf("oq outline %s %s  (child sizes), then oq get a child", shq(o.pos[0]), shq(w.Addr(n)))
-	}
 	meta := o.metadata || o.format == "columns" || o.format == "name"
 	if o.header && !meta {
 		return nil, fail(ExitUsage, "--header on get needs --metadata (raw text has no columns)")
@@ -100,7 +89,7 @@ func cmdGet(c *cli, o *opts) (*result, error) {
 		if !strings.HasSuffix(text, "\n") {
 			text += "\n"
 		}
-		return &result{[]byte(text), hint}, nil
+		return &result{[]byte(text)}, nil
 	}
 	l1, c1 := n.Doc.Pos(n.ValStart)
 	l2, c2 := n.Doc.Pos(n.ValEnd)
@@ -108,13 +97,13 @@ func cmdGet(c *cli, o *opts) (*result, error) {
 		{"address", w.Addr(n)}, {"kind", kindOf(n.Val)}, {"file", fileLabel(w, n.Doc)},
 		{"line", l1}, {"col", c1}, {"endLine", l2}, {"endCol", c2},
 		{"startByte", n.ValStart}, {"endByte", n.ValEnd},
-		{"hash", hashOf(text)}, {"tokens", tokensOf(text)},
+		{"hash", hashOf(text)},
 	}
 	data, err := render([]Rec{rec}, o, true)
 	if err != nil {
 		return nil, err
 	}
-	return &result{data, hint}, nil
+	return &result{data}, nil
 }
 
 func fileLabel(w *WS, d *Doc) string {
@@ -179,9 +168,9 @@ func cmdAt(c *cli, o *opts) (*result, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &result{data, ""}, nil
+		return &result{data}, nil
 	}
-	return &result{[]byte(w.Addr(cur) + "\n"), ""}, nil
+	return &result{[]byte(w.Addr(cur) + "\n")}, nil
 }
 
 func cmdLs(c *cli, o *opts) (*result, error) {
@@ -198,13 +187,13 @@ func cmdLs(c *cli, o *opts) (*result, error) {
 		for _, op := range w.Ops() {
 			recs = append(recs, Rec{
 				{"address", w.Addr(op.Node)}, {"method", strings.ToUpper(op.Method)}, {"path", op.Path},
-				{"operationId", op.ID}, {"tokens", op.Node.tokens()},
+				{"operationId", op.ID},
 			})
 		}
 	case "schemas":
 		for _, b := range w.schemaBases() {
 			for _, k := range b.Kids {
-				recs = append(recs, Rec{{"address", w.Addr(k)}, {"name", k.Seg}, {"tokens", k.tokens()}})
+				recs = append(recs, Rec{{"address", w.Addr(k)}, {"name", k.Seg}})
 			}
 		}
 	case "tags":
@@ -222,13 +211,13 @@ func cmdLs(c *cli, o *opts) (*result, error) {
 				if nm := k.Child("name"); nm != nil {
 					name = nm.Val.Value
 				}
-				recs = append(recs, Rec{{"address", w.Addr(k)}, {"name", name}, {"tokens", k.tokens()}, {"ops", count[name]}})
+				recs = append(recs, Rec{{"address", w.Addr(k)}, {"name", name}, {"ops", count[name]}})
 			}
 		}
 	case "files":
 		docs := w.Closure()
 		for _, d := range docs[1:] {
-			recs = append(recs, Rec{{"path", d.Disp}, {"tokens", tokensOfBytes(d.Src)}, {"status", "ok"}})
+			recs = append(recs, Rec{{"path", d.Disp}, {"status", "ok"}})
 		}
 		miss := w.MissingFiles()
 		for _, f := range slices.Sorted(maps.Keys(miss)) {
@@ -236,13 +225,12 @@ func cmdLs(c *cli, o *opts) (*result, error) {
 			if !strings.HasPrefix(miss[f].Error(), "file not found") {
 				st = "parse-error"
 			}
-			recs = append(recs, Rec{{"path", f}, {"tokens", "-"}, {"status", st}})
+			recs = append(recs, Rec{{"path", f}, {"status", st}})
 		}
 	default:
 		return nil, fail(ExitUsage, "unknown listing %q (want ops, schemas, tags or files)", o.pos[1])
 	}
-	hint := fmt.Sprintf("oq outline %s /paths  (or filter this listing with grep/awk)", shq(o.pos[0]))
-	return finishList(recs, o, hint)
+	return finishList(recs, o)
 }
 
 func cmdDeps(c *cli, o *opts) (*result, error) {
@@ -292,19 +280,18 @@ func cmdDeps(c *cli, o *opts) (*result, error) {
 		if !d.t.Resolved() {
 			unresolved++
 			if o.unresolved {
-				recs = append(recs, Rec{{"address", w.TargetAddr(d.t)}, {"tokens", "-"}, {"depth", d.depth}, {"from", d.from}, {"reason", d.t.Reason}})
+				recs = append(recs, Rec{{"address", w.TargetAddr(d.t)}, {"depth", d.depth}, {"from", d.from}, {"reason", d.t.Reason}})
 			}
 			continue
 		}
 		if !o.unresolved {
-			recs = append(recs, Rec{{"address", w.TargetAddr(d.t)}, {"tokens", d.t.Node.tokens()}, {"depth", d.depth}, {"from", d.from}})
+			recs = append(recs, Rec{{"address", w.TargetAddr(d.t)}, {"depth", d.depth}, {"from", d.from}})
 		}
 	}
 	if unresolved > 0 && !o.unresolved {
 		fmt.Fprintf(c.err, "oq: %d unresolved ref(s) skipped (list them with --unresolved)\n", unresolved)
 	}
-	hint := fmt.Sprintf("oq deps %s %s --depth %d", shq(o.pos[0]), shq(o.pos[1]), max(1, depth-1))
-	return finishList(recs, o, hint)
+	return finishList(recs, o)
 }
 
 func cmdRefs(c *cli, o *opts) (*result, error) {
@@ -330,12 +317,12 @@ func cmdRefs(c *cli, o *opts) (*result, error) {
 			}
 			seen[s.Node] = true
 			recs = append(recs, Rec{
-				{"address", w.Addr(s.Node)}, {"tokens", s.Node.tokens()},
+				{"address", w.Addr(s.Node)},
 				{"target", w.TargetAddr(t)}, {"in", w.enclosing(s.Node)},
 			})
 		}
 	}
-	return finishList(recs, o, "narrow the address, or filter with grep")
+	return finishList(recs, o)
 }
 
 func hasPrefix(s, p []string) bool { return len(s) >= len(p) && slices.Equal(s[:len(p)], p) }

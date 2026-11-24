@@ -23,15 +23,6 @@ type KV struct {
 
 type Rec []KV
 
-// Tok is an approximate token count (characters / 4).
-type Tok int
-
-func (t Tok) String() string { return "~" + strconv.Itoa(int(t)) }
-
-func tokensOf(s string) Tok { return Tok((utf8.RuneCountInString(s) + 3) / 4) }
-
-func tokensOfBytes(b []byte) Tok { return Tok((utf8.RuneCount(b) + 3) / 4) }
-
 func jsonStr(v any) string {
 	var b bytes.Buffer
 	e := json.NewEncoder(&b)
@@ -49,12 +40,7 @@ func (r Rec) json() string {
 		}
 		b.WriteString(jsonStr(kv.K))
 		b.WriteByte(':')
-		switch v := kv.V.(type) {
-		case Tok:
-			b.WriteString(strconv.Itoa(int(v)))
-		default:
-			b.WriteString(jsonStr(v))
-		}
+		b.WriteString(jsonStr(kv.V))
 	}
 	b.WriteByte('}')
 	return b.String()
@@ -71,8 +57,6 @@ func (r Rec) yaml(first, rest string) string {
 		}
 		var v string
 		switch x := kv.V.(type) {
-		case Tok:
-			v = strconv.Itoa(int(x))
 		case string:
 			v = yamlStr(x, len(rest)+2)
 		case map[string]int:
@@ -205,8 +189,6 @@ func (r Rec) tsv() string {
 	cols := make([]string, len(r))
 	for i, kv := range r {
 		switch v := kv.V.(type) {
-		case Tok:
-			cols[i] = v.String()
 		case string:
 			cols[i] = strings.NewReplacer("\t", " ", "\n", " ", "\r", "").Replace(v)
 		default:

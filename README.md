@@ -6,9 +6,9 @@ Searching, linting, formatting, bundling and summarising are other tools' jobs. 
 
 ```console
 $ oq ls petstore.yaml ops
-/paths/~1pets/get             GET   /pets            listPets   ~94
-/paths/~1pets/post            POST  /pets            createPet  ~65
-/paths/~1pets~1{pet_id}/get   GET   /pets/{pet_id}   getPet     ~92
+/paths/~1pets/get             GET   /pets            listPets
+/paths/~1pets/post            POST  /pets            createPet
+/paths/~1pets~1{pet_id}/get   GET   /pets/{pet_id}   getPet
 
 $ oq get petstore.yaml opid:getPet
 operationId: getPet
@@ -23,7 +23,7 @@ Coding agents read OpenAPI specs badly. A person opens a spec layer by layer: pa
 
 Real specs are big. On a 1.08 MB, 30,729-line public spec (about 270k tokens), `oq ls ops` lists all 92 operations in about 50 ms, and `oq get` on one operation returns about 940 tokens. No LLM is needed to fetch an exact answer.
 
-`yq` and `jq` can fetch any node, but they have no notion of folding, never report sizes, and `yq -i` re-serialises the whole file. `oq` reports sizes first, prints source text exactly, and edits by splicing only the target node's byte range.
+`yq` and `jq` can fetch any node, but they have no notion of folding, and `yq -i` re-serialises the whole file. `oq` lists structure first, prints source text exactly, and edits by splicing only the target node's byte range.
 
 ## Install
 
@@ -53,11 +53,11 @@ Release binaries (Linux, macOS, Windows; amd64 and arm64) are built with GoRelea
 
 ```
 read:
-  oq outline <spec> [addr] [--depth N]     child addresses, kind, ~tokens
-  oq ls      <spec> ops|schemas|tags|files one per line, with ~tokens
+  oq outline <spec> [addr] [--depth N]     child addresses, kind, line range
+  oq ls      <spec> ops|schemas|tags|files one per line
   oq get     <spec> <addr>                 exact source text; --metadata: range + hash
   oq at      <spec> <line>[:<col>]         innermost node at that position
-  oq deps    <spec> <addr> [--depth N]     refs this node depends on, with ~tokens
+  oq deps    <spec> <addr> [--depth N]     refs this node depends on
              [--unresolved]                only refs that do not resolve
   oq refs    <spec> <addr>                 nodes that reference this one
 
@@ -66,8 +66,7 @@ write (new content on stdin or --file F; the whole file goes to stdout unless -i
   oq insert  <spec> <addr> [--after KEY] [--expect H] [-i]
   oq rm      <spec> <addr> [--expect H] [-i]
 
-global: -o tsv|name|columns=a,b|json|yaml (default tsv), --max-tokens N (default 5000, 0 disables),
-        --header (listings), -h/--help
+global: -o tsv|name|columns=a,b|json|yaml (default tsv), --header (listings), -h/--help
 ```
 
 `oq <command> --help` (or `oq help <command>`) shows the usage and flags of one command.
@@ -102,30 +101,26 @@ Listings are one record per line, tab-separated, so `cut`, `sort`, `awk` and `xa
 
 | command   | columns |
 |-----------|---------|
-| `outline` | address, kind, ~tokens, line, endLine, note (`&anchor` or `*alias`) |
-| `ls ops`  | address, method, path, operationId, ~tokens |
-| `ls schemas` | address, name, ~tokens |
-| `ls tags` | address, name, ~tokens, ops |
-| `ls files` | path, ~tokens, status |
-| `deps`    | address, ~tokens, depth, from (`--unresolved` adds a reason column) |
-| `refs`    | address of the referencing node, ~tokens, target, in (enclosing operation or component) |
+| `outline` | address, kind, line, endLine, note (`&anchor` or `*alias`) |
+| `ls ops`  | address, method, path, operationId |
+| `ls schemas` | address, name |
+| `ls tags` | address, name, ops |
+| `ls files` | path, status |
+| `deps`    | address, depth, from (`--unresolved` adds a reason column) |
+| `refs`    | address of the referencing node, target, in (enclosing operation or component) |
 
-`get` prints the node's source text and nothing else, so it pipes straight into `yq`, `grep` or another tool. Block mappings and sequences are dedented so the output stands alone as YAML. `-o name` prints only the first column (the address, for most commands), and `-o columns=address,tokens` picks and orders columns by the names `--header` shows, so scripts do not depend on column positions:
+`get` prints the node's source text and nothing else, so it pipes straight into `yq`, `grep` or another tool. Block mappings and sequences are dedented so the output stands alone as YAML. `-o name` prints only the first column (the address, for most commands), and `-o columns=address,kind` picks and orders columns by the names `--header` shows, so scripts do not depend on column positions:
 
 ```sh
 oq deps spec.yaml opid:getPet -o name | xargs -I% oq get spec.yaml %
-oq ls spec.yaml schemas -o columns=name,tokens --header
+oq ls spec.yaml schemas -o columns=name,address --header
 ```
 
-`get` prints the node itself. By default that is the raw source text; `-o yaml` is the same text, and `-o json` is the node converted to JSON (pretty-printed, key order kept; aliases are not expanded, so a node containing one is an error). Add `--metadata` to print the node's metadata instead of its text, in the format `-o` names: a tsv row by default (`--header` adds the column names), or a flat record with `-o json` or `-o yaml`. Metadata fields: `address`, `kind`, `file`, `line`, `col`, `endLine`, `endCol`, `startByte`, `endByte`, `hash`, `tokens`. `-o columns=hash` implies `--metadata`.
+`get` prints the node itself. By default that is the raw source text; `-o yaml` is the same text, and `-o json` is the node converted to JSON (pretty-printed, key order kept; aliases are not expanded, so a node containing one is an error). Add `--metadata` to print the node's metadata instead of its text, in the format `-o` names: a tsv row by default (`--header` adds the column names), or a flat record with `-o json` or `-o yaml`. Metadata fields: `address`, `kind`, `file`, `line`, `col`, `endLine`, `endCol`, `startByte`, `endByte`, `hash`. `-o columns=hash` implies `--metadata`.
 
-`-o json` and `-o yaml` (long form `--output`) are available on every command for programs that want structured data. They repeat every field name on every record (about 70% more tokens than the default on `ls ops`), so agents should prefer the default text. There is deliberately no `--json` flag. The hash needed for edits does not need JSON: `oq get spec addr -o columns=hash` prints just the hash.
+`-o json` and `-o yaml` (long form `--output`) are available on every command for programs that want structured data. They repeat every field name on every record, so agents should prefer the default text. There is deliberately no `--json` flag. The hash needed for edits does not need JSON: `oq get spec addr -o columns=hash` prints just the hash.
 
-Token counts are characters / 4 and are approximate.
-
-### Size cap and exit codes
-
-If output would exceed `--max-tokens` (default 5000), `oq` prints nothing to stdout, reports the size and a narrower command on stderr, and exits `4`. It never truncates mid-node and never silently returns something else.
+### Exit codes
 
 | code | meaning |
 |------|---------|
@@ -133,7 +128,6 @@ If output would exceed `--max-tokens` (default 5000), `oq` prints nothing to std
 | 1 | address not found (like grep's "no match") |
 | 2 | usage or parse error |
 | 3 | stale write (`--expect` hash mismatch) |
-| 4 | output over the size cap |
 
 Errors go to stderr. Success is silent: no banners, no diffs (use `diff`).
 
@@ -203,12 +197,11 @@ Put this in `AGENTS.md`, `CLAUDE.md` or your agent's system prompt (also in [`do
 
 Never read an OpenAPI file whole or page through it. Use `oq` (addresses nodes, prints exact text):
 
-- `oq ls SPEC ops` / `oq ls SPEC schemas`: find things; the last column is ~tokens.
-- `oq outline SPEC [ADDR]`: children of a node with sizes. Unfold step by step.
+- `oq ls SPEC ops` / `oq ls SPEC schemas`: find things.
+- `oq outline SPEC [ADDR]`: children of a node with line ranges. Unfold step by step.
 - `oq get SPEC ADDR`: the exact text of one node. ADDR is `/json/pointer`, `GET /path`, `opid:name` or `schema:Name`.
 - `oq deps SPEC ADDR --depth 1`: what a node references; `oq refs SPEC ADDR`: what references it.
 - `oq at SPEC LINE`: which node a line belongs to (use with grep -n and linter output).
-- Exit 4 means the answer was over the size cap: narrow the address or use `outline`. Do not retry with `--max-tokens 0`.
 - To edit, `oq get SPEC ADDR -o columns=hash` first and keep the hash, then
   `oq set SPEC ADDR --expect HASH -i < new.yaml` (also `insert`, `rm`). Exit 3 means the node changed: re-read it.
   Never hand-edit a large spec file.

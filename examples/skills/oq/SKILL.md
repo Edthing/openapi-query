@@ -5,22 +5,22 @@ description: Navigate and edit large OpenAPI specs (YAML or JSON) with the oq CL
 
 # Working with OpenAPI specs using oq
 
-Never read an OpenAPI file whole or page through line ranges. `oq` addresses nodes and prints exact text with sizes, so fetch only what the question needs. Check `oq help` if a flag is unclear.
+Never read an OpenAPI file whole or page through line ranges. `oq` addresses nodes and prints exact text, so fetch only what the question needs. Check `oq help` if a flag is unclear.
 
 ## Find
 
 ```sh
-oq ls SPEC ops              # address, method, path, operationId, ~tokens
-oq ls SPEC schemas          # address, name, ~tokens
+oq ls SPEC ops              # address, method, path, operationId
+oq ls SPEC schemas          # address, name
 oq ls SPEC ops | grep -i invoice
 ```
 
 ## Read, narrowing step by step
 
 ```sh
-oq outline SPEC /paths                 # children with kind and ~tokens
+oq outline SPEC /paths                 # children with kind and line range
 oq get SPEC 'GET /items/{item_id}'     # exact source text of one node
-oq outline SPEC path:/items/{item_id}  # all methods of one path, with sizes
+oq outline SPEC path:/items/{item_id}  # all methods of one path
 oq get SPEC opid:listItems
 oq get SPEC schema:Item
 ```
@@ -41,10 +41,6 @@ oq deps SPEC / --unresolved           # broken refs
 grep -n 'deprecated: true' SPEC | cut -d: -f1 | xargs -n1 oq at SPEC
 oq get SPEC "$(oq at SPEC 812)"       # open the node a linter line belongs to
 ```
-
-## Size cap
-
-Exit code 4 means the answer was over the cap (default ~5000 tokens). Nothing was printed. Follow the suggested narrower command, or use `outline`. Do not retry with `--max-tokens 0`.
 
 ## Edit
 
